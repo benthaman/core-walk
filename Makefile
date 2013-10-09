@@ -1,4 +1,4 @@
-LDFLAGS+=-lelf
+LDFLAGS+=-lelf -ldwarf
 CFLAGS+=-Wall
 
 core_walk:
