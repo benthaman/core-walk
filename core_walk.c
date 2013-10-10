@@ -13,11 +13,40 @@
 #include <libdwarf/libdwarf.h>
 #include <dwarf.h>
 
+#include "util.h"
+
+
+struct call_entry {
+	unsigned long pc;
+	char *symbol;
+	int offset;
+};
+
+int print_call_info(char *objname, Dwarf_Debug dwarf, struct call_entry *call);
+int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc, Dwarf_Die *result);
+void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
+
 
 int main(int argc, char *argv[])
 {
-	int fd;
+	int fd, i;
 	char *objname = argv[1];
+	struct call_entry calltrace[] = {
+		{0xffffffff8134e51d, "sysrq_handle_crash", 0xd},
+		{0xffffffff8134eaa4, "__handle_sysrq", 0xa4},
+		{0xffffffff81362239, "serial8250_handle_port", 0x2b9},
+		{0xffffffff8136242c, "serial8250_interrupt", 0x8c},
+		{0xffffffff810bd163, "handle_irq_event_percpu", 0x43},
+		{0xffffffff810bd324, "handle_irq_event", 0x34},
+		{0xffffffff810bfb8f, "handle_edge_irq", 0x5f},
+		{0xffffffff81004085, "handle_irq", 0x15},
+		{0xffffffff81003d22, "do_IRQ", 0x52},
+		{0xffffffff81733d13, "common_interrupt", 0x13},
+		{0xffffffff8102cbf2, "native_safe_halt", 0x2},
+		{0xffffffff81009e27, "default_idle", 0x47},
+		{0xffffffff81001186, "cpu_idle", 0x66},
+		{0xffffffff8171d40c, "start_secondary", 0x232},
+	};
 	int retval;
 
 	Elf *elf;
@@ -29,7 +58,7 @@ int main(int argc, char *argv[])
 
 	if (argc != 2) {
 		fprintf(stderr, "Wrong number of arguments\n");
-		fprintf(stderr, "Usage: %s <core>\n", argv[0]);
+		fprintf(stderr, "Usage: %s <vmlinux>\n", argv[0]);
 		return EXIT_FAILURE;
 	}
 
@@ -90,33 +119,31 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Error: at line %d, libdwarf operation failed\n", __LINE__);
 	}
 
-	/* this is where it gets real */
-	struct call_entry {
-		unsigned long pc;
-		char *symbol;
-	} calltrace[] = {
-		{0xffffffff8134e51d, "sysrq_handle_crash+0xd"},
-		{0xffffffff8134eaa4, "__handle_sysrq+0xa4"},
-		{0xffffffff81362239, "serial8250_handle_port+0x2b9"},
-		{0xffffffff8136242c, "serial8250_interrupt+0x8c"},
-		{0xffffffff810bd163, "handle_irq_event_percpu+0x43"},
-		{0xffffffff810bd324, "handle_irq_event+0x34"},
-		{0xffffffff810bfb8f, "handle_edge_irq+0x5f"},
-		{0xffffffff81004085, "handle_irq+0x15"},
-		{0xffffffff81003d22, "do_IRQ+0x52"},
-		{0xffffffff81733d13, "common_interrupt+0x13"},
-		{0xffffffff8102cbf2, "native_safe_halt+0x2"},
-		{0xffffffff81009e27, "default_idle+0x47"},
-		{0xffffffff81001186, "cpu_idle+0x66"},
-		{0xffffffff8171d40c, "start_secondary+0x232"},
-	}, *call = &calltrace[0];
+	for (i = 0;
+	     i < ARRAY_SIZE(calltrace) && print_call_info(objname, dwarf, &calltrace[i]) == 0;
+	     i++) {
+	}
 
+	dwarf_finish(dwarf, NULL);
+	elf_end(elf);
+	close(fd);
+
+	return EXIT_SUCCESS;
+}
+
+
+int print_call_info(char *objname, Dwarf_Debug dwarf, struct call_entry *call)
+{
 	Dwarf_Arange *aranges, arange;
 	Dwarf_Signed cnt;
+	Dwarf_Unsigned lang;
 	Dwarf_Off doff;
 	Dwarf_Die die, die2;
 	Dwarf_Error derr;
+	char *name;
+	int retval;
 
+	/* lookup the CU using the .debug_aranges section */
 	retval = dwarf_get_aranges(dwarf, &aranges, &cnt, &derr);
 	if (retval == DW_DLV_NO_ENTRY) {
 		fprintf(stderr, "Error: \"%s\" does not contain a .debug_aranges section\n", objname);
@@ -147,20 +174,229 @@ int main(int argc, char *argv[])
 		abort();
 	}
 
-	retval = search_tree(dwarf, die, DW_TAG_subprogram, call->pc, &die2);
+	printf("Compilation Unit\n");
+	print_die_info(dwarf, die);
+
+	retval = dwarf_srclang(die, &lang, &derr);
+	if (retval == DW_DLV_ERROR) {
+		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
+		abort();
+	} else if (retval == DW_DLV_OK && lang == DW_LANG_Mips_Assembler) {
+		fprintf(stderr,
+			"Warning: \"%s\" is defined in assembly source, stopping here for now\n",
+			call->symbol);
+		return -EDOM;
+	}
+
+	/* lookup the subprogram DIE in the CU */
+	retval = find_subprogram_by_pc(dwarf, die, call->pc, &die2);
 	if (retval == -1) {
 		fprintf(stderr, "Error: no subprogram entry found for the following call:\n");
-		fprintf(stderr, "[<%016lx>] %s\n", call->pc, call->symbol); 
+		fprintf(stderr, "[<%016lx>] %s+0x%x\n", call->pc, call->symbol, call->offset); 
 		abort();
 	}
 	dwarf_dealloc(dwarf, die, DW_DLA_DIE);
 
+	printf("Subprogram\n");
+	print_die_info(dwarf, die2);
+
+	retval = dwarf_diename(die2, &name, &derr);
+	if (retval == DW_DLV_ERROR) {
+		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
+		abort();
+	} else if (retval == DW_DLV_NO_ENTRY) {
+		fprintf(stderr, "Error: expected subprogram DIE to have a name\n");
+		print_die_info(dwarf, die2);
+		abort();
+	} else {
+		if (strcmp(name, call->symbol) != 0) {
+			fprintf(stderr, "Error: wrong DIE found, expected '%s'\n", call->symbol);
+			print_die_info(dwarf, die2);
+			abort();
+		}
+		dwarf_dealloc(dwarf, name, DW_DLA_STRING);
+	}
+
+	/* print parameters and variables */
+	// TODO
+
+	dwarf_dealloc(dwarf, die2, DW_DLA_DIE);
+	return 0;
+}
 
 
+int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc, Dwarf_Die *result)
+{
+	Dwarf_Die die2 = NULL, die3;
+	Dwarf_Error derr;
+	int retval;
 
-	dwarf_finish(dwarf, NULL);
-	elf_end(elf);
-	close(fd);
+	for (retval = dwarf_child(die, &die2, &derr);
+	     retval == DW_DLV_OK;
+	     retval = dwarf_siblingof(dwarf, die2, &die3, &derr),
+	     dwarf_dealloc(dwarf, die2, DW_DLA_DIE), die2 = die3) {
+		Dwarf_Half tag;
+		Dwarf_Addr retpc;
 
-	return EXIT_SUCCESS;
+		if (dwarf_tag(die2, &tag, &derr) != DW_DLV_OK) {
+			fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+				__LINE__, dwarf_errmsg(derr));
+			abort();
+		}
+		if (tag != DW_TAG_subprogram) {
+			continue;
+		}
+
+		/* low_pc/high_pc case */
+		retval = dwarf_lowpc(die2, &retpc, &derr);
+		if (retval == DW_DLV_ERROR) {
+			fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+				__LINE__, dwarf_errmsg(derr));
+			abort();
+		} else if (retval == DW_DLV_OK) {
+			if (pc < retpc) {
+				continue;
+			}
+
+			retval = dwarf_highpc(die2, &retpc, &derr);
+			if (retval == DW_DLV_ERROR) {
+				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+					__LINE__, dwarf_errmsg(derr));
+				abort();
+			} else if (retval == DW_DLV_OK) {
+				if (pc > retpc) {
+					continue;
+				}
+
+				*result = die2;
+				return 0;
+			}
+		}
+
+		/* ranges case */
+		// TODO
+
+		/* a subprogram entry may have been inlined (DW_AT_inline) or
+		 * may be external (DW_AT_external), in which case it will not
+		 * have code addresses. We assume this is what's happening
+		 * if the control flow makes it here. For completeness, we
+		 * could instead check that this is really the case. */
+	}
+	if (retval == DW_DLV_ERROR) {
+		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
+		abort();
+	}
+	if (die2) {
+		dwarf_dealloc(dwarf, die2, DW_DLA_DIE);
+	}
+
+	return -1;
+}
+
+
+void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
+{
+	Dwarf_Half tag;
+	Dwarf_Error derr;
+	Dwarf_Off global_off, cu_off;
+	Dwarf_Attribute *attrbuf;
+	Dwarf_Signed attrcount;
+	const char *name;
+	int retval;
+
+	if (dwarf_die_offsets(die, &global_off, &cu_off, &derr) != DW_DLV_OK) {
+		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+			__LINE__, dwarf_errmsg(derr));
+		abort();
+	}
+
+	if (dwarf_tag(die, &tag, &derr) != DW_DLV_OK) {
+		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+			__LINE__, dwarf_errmsg(derr));
+		abort();
+	}
+
+	if (dwarf_get_TAG_name(tag, &name) != DW_DLV_OK) {
+		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+			__LINE__, dwarf_errmsg(derr));
+		abort();
+	}
+
+	printf("<0x%016" DW_PR_DUx "> <0x%016" DW_PR_DUx "> %s\n", global_off, cu_off, name);
+
+	retval = dwarf_attrlist(die, &attrbuf, &attrcount, &derr);
+	if (retval == DW_DLV_ERROR) {
+		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+			__LINE__, dwarf_errmsg(derr));
+		abort();
+	} else if (retval == DW_DLV_OK) {
+		int i;
+
+		for (i = 0; i < attrcount; i++) {
+			Dwarf_Half form, at;
+			const char *form_name, *attr_name;
+
+			if (dwarf_whatform(attrbuf[i], &form, &derr) != DW_DLV_OK) {
+				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+					__LINE__, dwarf_errmsg(derr));
+				abort();
+			}
+
+			if (dwarf_get_FORM_name(form, &form_name) != DW_DLV_OK) {
+				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+					__LINE__, dwarf_errmsg(derr));
+				abort();
+			}
+
+			if (dwarf_whatattr(attrbuf[i], &at, &derr) != DW_DLV_OK) {
+				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+					__LINE__, dwarf_errmsg(derr));
+				abort();
+			}
+			if (dwarf_get_AT_name(at, &attr_name) != DW_DLV_OK) {
+				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+					__LINE__, dwarf_errmsg(derr));
+				abort();
+			}
+
+			printf("    %s (%s)", attr_name, form_name);
+
+			switch (form) {
+				char *retstring;
+				Dwarf_Unsigned retudata;
+				Dwarf_Signed retsdata;
+
+			case DW_FORM_strp:
+			case DW_FORM_string:
+				if (dwarf_formstring(attrbuf[i], &retstring, &derr) != DW_DLV_OK) {
+					fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+						__LINE__, dwarf_errmsg(derr));
+					abort();
+				}
+				printf(" = %s", retstring);
+				break;
+
+			case DW_FORM_data1:
+			case DW_FORM_data2:
+			case DW_FORM_data4:
+			case DW_FORM_data8:
+				if (dwarf_formudata(attrbuf[i], &retudata, &derr) != DW_DLV_OK) {
+					fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+						__LINE__, dwarf_errmsg(derr));
+					abort();
+				}
+				if (dwarf_formsdata(attrbuf[i], &retsdata, &derr) != DW_DLV_OK) {
+					fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
+						__LINE__, dwarf_errmsg(derr));
+					abort();
+				}
+				printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata, retsdata);
+				break;
+			}
+			printf("\n");
+
+			dwarf_dealloc(dwarf, attrbuf[i], DW_DLA_ATTR);
+		}
+		dwarf_dealloc(dwarf, attrbuf, DW_DLA_LIST);
+	}
 }
