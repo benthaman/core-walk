@@ -1,0 +1,25 @@
+Goal:
+Read in a crash or oops-style backtrace and access DWARF information to output
+the current content of the stack and registers in term of symbols, and the the
+crash commands to dump/pretty print them. In other words, when looking at a
+crash dump, answer the questions "Which variable is currently stored in $rax?
+What is the structure of the stack? Which variable is stored at $rsp+16?"
+
+Todo list:
+* implement a location expression evaluator in print_var_info()
+* output gdb `x` commands at the end of print_var_info() to actually get the
+  values
+* track/restore processor state using the information in .debug_frame to
+  actually walk up the call stack
+* parse the oops message, instead of the current one hardcoded in calltrace
+* support separate debug symbols via .gnu_debuglink
+* support modules
+
+Wishlist:
+* read the kernel log, module locations and variable values directly from the
+  kdump itself
+
+This started out as a project for hackweek 10.
+https://hackweek.suse.com/projects/95
+
+Benjamin Poirier <bpoirier@suse.de>
