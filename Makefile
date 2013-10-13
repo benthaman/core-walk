@@ -1,7 +1,7 @@
 LDFLAGS+=-lelf -ldwarf
 CFLAGS+=-Wall -g
 
-core_walk: core_walk.c util.h
+core_walk: core_walk.c util.h list.h
 
 .PHONY: clean
 clean:

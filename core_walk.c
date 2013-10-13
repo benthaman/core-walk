@@ -13,6 +13,7 @@
 #include <libdwarf/libdwarf.h>
 #include <dwarf.h>
 
+#include "list.h"
 #include "util.h"
 
 
@@ -24,8 +25,10 @@ struct call_entry {
 
 int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		    Dwarf_Signed ar_cnt, struct call_entry *call);
-int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc, Dwarf_Die *result);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
+void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
+
+int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc, Dwarf_Die *result);
 
 
 int main(int argc, char *argv[])
@@ -51,17 +54,13 @@ int main(int argc, char *argv[])
 	int retval;
 
 	Elf *elf;
-	Elf_Scn *scn;
-	GElf_Shdr shdr;
-	size_t shstrndx;
 
 	Dwarf_Debug dwarf;
 	Dwarf_Arange *aranges;
 	Dwarf_Signed ar_cnt;
-	Dwarf_Error derr;
 
 	if (argc != 2) {
-		fprintf(stderr, "Wrong number of arguments\n");
+		fprintf(stderr, "Wrong number of arguments.\n");
 		fprintf(stderr, "Usage: %s <vmlinux>\n", argv[0]);
 		return EXIT_FAILURE;
 	}
@@ -84,60 +83,33 @@ int main(int argc, char *argv[])
 	}
 
 	if (elf_kind(elf) != ELF_K_ELF) {
-		fprintf(stderr, "Error: \"%s\" is not an ELF object\n", objname);
+		fprintf(stderr, "Error: \"%s\" is not an ELF object.\n", objname);
 		abort();
-	}
-
-	if (elf_getshdrstrndx(elf, &shstrndx) != 0) {
-		fprintf(stderr, "Error: at line %d, libelf says: %s\n", __LINE__, elf_errmsg(-1));
-		abort();
-	}
-
-	scn = NULL;
-	for (scn = NULL; (scn = elf_nextscn(elf, scn)) != NULL;) {
-		char *name;
-
-		if (gelf_getshdr(scn, &shdr) != &shdr) {
-			fprintf(stderr, "Error: at line %d, libelf says: %s\n", __LINE__, elf_errmsg(-1));
-			abort();
-		}
-
-		if ((name = elf_strptr(elf, shstrndx, shdr.sh_name)) == NULL) {
-			fprintf(stderr, "Error: at line %d, libelf says: %s\n", __LINE__, elf_errmsg(-1));
-			abort();
-		}
-
-		if (strcmp(name, ".eh_frame") == 0 ||
-		    strcmp(name, ".debug_frame") == 0 ||
-		    strcmp(name, ".debug_info") == 0 ||
-		    strcmp(name, ".debug_aranges") == 0) {
-			printf("section %zd: %s\n", elf_ndxscn(scn), name);
-		}
 	}
 
 	retval = dwarf_elf_init(elf, DW_DLC_READ, NULL, NULL, &dwarf, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: \"%s\" does not contain debug information\n", objname);
+		fprintf(stderr, "Error: \"%s\" does not contain debug information.\n", objname);
 		abort();
-	} else if (retval != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf operation failed\n", __LINE__);
 	}
 
-	retval = dwarf_get_aranges(dwarf, &aranges, &ar_cnt, &derr);
+	/* todo: fallback to traversing all DIEs, especially if searching by
+	 * symbol instead of address */
+	retval = dwarf_get_aranges(dwarf, &aranges, &ar_cnt, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: \"%s\" does not contain a .debug_aranges section\n", objname);
-		abort();
-	} else if (retval != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
+		fprintf(stderr, "Error: \"%s\" does not contain a .debug_aranges section.\n", objname);
 		abort();
 	}
 
-
+	i = 0;
+	print_call_info(objname, dwarf, aranges, ar_cnt, &calltrace[i]);
+	/*
 	for (i = 0;
 	     i < ARRAY_SIZE(calltrace) &&
 	     print_call_info(objname, dwarf, aranges, ar_cnt, &calltrace[i]) == 0;
 	     i++) {
 	}
+	*/
 
 	for (i = 0; i < ar_cnt; i++) {
 		dwarf_dealloc(dwarf, aranges[i], DW_DLA_ARANGE);
@@ -154,47 +126,35 @@ int main(int argc, char *argv[])
 int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		    Dwarf_Signed ar_cnt, struct call_entry *call)
 {
-	Dwarf_Arange arange;
+	Dwarf_Arange cu_arange;
 	Dwarf_Unsigned lang;
-	Dwarf_Off doff;
+	Dwarf_Off cu_doff;
 	Dwarf_Die cu_die, sp_die;
-	Dwarf_Error derr;
 	char *name;
 	int retval;
 
 	/* lookup the CU using the .debug_aranges section */
-	/* todo: fallback to traversing all DIEs, especially if searching by
-	 * symbol instead of address */
-	retval = dwarf_get_arange(aranges, ar_cnt, call->pc, &arange, &derr);
+	retval = dwarf_get_arange(aranges, ar_cnt, call->pc, &cu_arange, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
 		fprintf(stderr, "Error: no arange entry found for the following call:\n");
 		fprintf(stderr, "[<%016lx>] %s\n", call->pc, call->symbol); 
 		abort();
-	} else if (retval != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
-		abort();
 	}
 
-	if (dwarf_get_cu_die_offset(arange, &doff, &derr) != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
-		abort();
-	}
-
-	if (dwarf_offdie(dwarf, doff, &cu_die, &derr) != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
-		abort();
-	}
+	dwarf_get_cu_die_offset(cu_arange, &cu_doff, NULL);
+	dwarf_offdie(dwarf, cu_doff, &cu_die, NULL);
 
 	printf("Compilation Unit\n");
 	print_die_info(dwarf, cu_die);
 
-	retval = dwarf_srclang(cu_die, &lang, &derr);
-	if (retval == DW_DLV_ERROR) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
+	retval = dwarf_srclang(cu_die, &lang, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		fprintf(stderr, "Error: expected CU DIE to contain a language attribute.\n");
+		print_die_info(dwarf, cu_die);
 		abort();
-	} else if (retval == DW_DLV_OK && lang == DW_LANG_Mips_Assembler) {
+	} else if (lang == DW_LANG_Mips_Assembler) {
 		fprintf(stderr,
-			"Warning: \"%s\" is defined in assembly source, stopping here for now\n",
+			"Warning: \"%s\" is defined in assembly source, stopping here for now.\n",
 			call->symbol);
 		return -EDOM;
 	}
@@ -211,17 +171,14 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 	printf("Subprogram\n");
 	print_die_info(dwarf, sp_die);
 
-	retval = dwarf_diename(sp_die, &name, &derr);
-	if (retval == DW_DLV_ERROR) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
-		abort();
-	} else if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: expected subprogram DIE to have a name\n");
+	retval = dwarf_diename(sp_die, &name, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		fprintf(stderr, "Error: expected subprogram DIE to have a name.\n");
 		print_die_info(dwarf, sp_die);
 		abort();
 	} else {
 		if (strcmp(name, call->symbol) != 0) {
-			fprintf(stderr, "Error: wrong DIE found, expected '%s'\n", call->symbol);
+			fprintf(stderr, "Error: wrong DIE found, expected \"%s\".\n", call->symbol);
 			print_die_info(dwarf, sp_die);
 			abort();
 		}
@@ -229,54 +186,375 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 	}
 
 	/* print parameters and variables */
-	// TODO
+	Dwarf_Die child, sibling;
 
+	foreach_child(dwarf, sp_die, child, sibling, retval) {
+		Dwarf_Half tag;
 
+		dwarf_tag(child, &tag, NULL);
+		if (tag == DW_TAG_formal_parameter || tag == DW_TAG_variable) {
+			printf("Data object entry\n");
+			print_die_info(dwarf, child);
 
-
-
+			print_var_info(dwarf, child);
+		}
+	}
 
 	dwarf_dealloc(dwarf, sp_die, DW_DLA_DIE);
 	return 0;
 }
 
 
+void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
+{
+	Dwarf_Half tag;
+	Dwarf_Off global_off, cu_off;
+	Dwarf_Attribute *attrbuf;
+	Dwarf_Signed attrcount;
+	const char *name;
+	int i;
+	int retval;
+
+	dwarf_die_offsets(die, &global_off, &cu_off, NULL);
+	dwarf_tag(die, &tag, NULL);
+	dwarf_get_TAG_name(tag, &name);
+
+	printf("<0x%016" DW_PR_DUx "> <0x%016" DW_PR_DUx "> %s\n", global_off, cu_off, name);
+
+	retval = dwarf_attrlist(die, &attrbuf, &attrcount, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		return;
+	}
+
+	for (i = 0; i < attrcount; i++) {
+		Dwarf_Half form, at;
+		const char *form_name, *attr_name;
+
+		dwarf_whatform(attrbuf[i], &form, NULL);
+		dwarf_get_FORM_name(form, &form_name);
+		dwarf_whatattr(attrbuf[i], &at, NULL);
+		dwarf_get_AT_name(at, &attr_name);
+
+		printf("    %s (%s)", attr_name, form_name);
+
+		switch (form) {
+			char *retstring;
+			Dwarf_Unsigned retudata;
+			Dwarf_Signed retsdata;
+
+		case DW_FORM_strp:
+		case DW_FORM_string:
+			dwarf_formstring(attrbuf[i], &retstring, NULL);
+			printf(" = %s", retstring);
+			break;
+
+		case DW_FORM_data1:
+		case DW_FORM_data2:
+		case DW_FORM_data4:
+		case DW_FORM_data8:
+			dwarf_formudata(attrbuf[i], &retudata, NULL);
+			dwarf_formsdata(attrbuf[i], &retsdata, NULL);
+			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata, retsdata);
+			break;
+		}
+		printf("\n");
+
+		dwarf_dealloc(dwarf, attrbuf[i], DW_DLA_ATTR);
+	}
+	dwarf_dealloc(dwarf, attrbuf, DW_DLA_LIST);
+}
+
+
+struct type_atom {
+	struct list_head list;
+	Dwarf_Half tag;
+	char *string;
+	enum {
+		ALLOC_DWARF,
+		ALLOC_MALLOC,
+		ALLOC_STATIC,
+	} alloc_type;
+};
+
+
+struct type_info {
+	struct list_head repr;
+	void *address;
+	unsigned int repeat;
+	unsigned int indir_nb;
+	enum {
+		FORMAT_D,
+		FORMAT_U,
+		FORMAT_F,
+		FORMAT_P,
+		FORMAT_C,
+		FORMAT_S,
+		FORMAT_STRUCT,
+	} format;
+	Dwarf_Unsigned size;
+};
+
+
+/* technically, it prints info about a "data object entry", not just "var" */
+void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
+{
+	Dwarf_Attribute attr;
+	struct type_info type = {
+		.repr = LIST_HEAD_INIT(type.repr),
+		.address = NULL,
+		.indir_nb = 0,
+		.repeat = 1,
+	};
+	struct type_atom *atom;
+	union {
+		char *string;
+		Dwarf_Unsigned udata;
+	} const_value;
+	int retval;
+
+	if (dwarf_attr(var_die, DW_AT_const_value, &attr, NULL) == DW_DLV_OK) {
+		Dwarf_Half form;
+
+		dwarf_whatform(attr, &form, NULL);
+		switch (form) {
+			const char *form_name;
+
+		case DW_FORM_strp:
+		case DW_FORM_string:
+			dwarf_formstring(attr, &const_value.string, NULL);
+			break;
+
+		case DW_FORM_data1:
+		case DW_FORM_data2:
+		case DW_FORM_data4:
+		case DW_FORM_data8:
+			dwarf_formudata(attr, &const_value.udata, NULL);
+			break;
+
+		default:
+			dwarf_get_FORM_name(form, &form_name);
+			fprintf(stderr,
+				"Error: unsupported const_value form \"%s\", please extend the code.\n",
+				form_name);
+			print_die_info(dwarf, var_die);
+			abort();
+		}
+
+		type.address = &const_value;
+	} else if (dwarf_attr(var_die, DW_AT_location, &attr, NULL) == DW_DLV_OK) {
+		/* evaluate the location expression, oh boy! */
+	}
+
+	/* traverse the DW_TAG_*_type chain */
+	atom = malloc(sizeof(*atom));
+	list_add(&atom->list, &type.repr);
+	if (dwarf_diename(var_die, &atom->string, NULL) == DW_DLV_NO_ENTRY) {
+		fprintf(stderr, "Error: expected variable DIE to have a name.\n");
+		print_die_info(dwarf, var_die);
+		abort();
+	}
+	atom->alloc_type = ALLOC_DWARF;
+	atom->tag = DW_TAG_variable;
+
+	if (dwarf_attr(var_die, DW_AT_type, &attr, NULL) == DW_DLV_NO_ENTRY) {
+		fprintf(stderr, "Error: expected variable DIE to have a type.\n");
+		print_die_info(dwarf, var_die);
+		abort();
+	}
+	while (true) {
+		Dwarf_Off type_offset;
+		Dwarf_Die type_die;
+		Dwarf_Half tag;
+		Dwarf_Error derr;
+
+		dwarf_global_formref(attr, &type_offset, NULL);
+		dwarf_offdie(dwarf, type_offset, &type_die, &derr);
+		dwarf_tag(type_die, &tag, NULL);
+
+		/* malloc and fill a repr element */
+		atom = malloc(sizeof(*atom));
+		list_add(&atom->list, &type.repr);
+		atom->tag = tag;
+
+		switch (tag) {
+			Dwarf_Die subrange_die;
+			Dwarf_Signed repeat;
+			const char *tag_name;
+			char *base_type_name;
+
+		case DW_TAG_pointer_type:
+			atom->string = "*";
+			atom->alloc_type = ALLOC_STATIC;
+
+			type.indir_nb++;
+			break;
+
+		case DW_TAG_array_type:
+			if (dwarf_child(type_die, &subrange_die, NULL) == DW_DLV_NO_ENTRY) {
+				fprintf(stderr, "Error: expected array_type DIE to have a subrange_type child.\n");
+				print_die_info(dwarf, type_die);
+				abort();
+			}
+
+			if (dwarf_attr(subrange_die, DW_AT_upper_bound, &attr, NULL) == DW_DLV_NO_ENTRY) {
+				fprintf(stderr, "Error: expected subrange_type DIE to have an upper_bound.\n");
+				print_die_info(dwarf, var_die);
+				abort();
+			}
+			dwarf_dealloc(dwarf, subrange_die, DW_DLA_DIE);
+			dwarf_formsdata(attr, &repeat, NULL);
+			if (repeat < 1) {
+				fprintf(stderr, "Error: expected upper_bound to be positive, got %" DW_PR_DSd ".\n",
+					repeat);
+				abort();
+			}
+			dwarf_dealloc(dwarf, attr, DW_DLA_ATTR);
+			type.repeat *= repeat;
+
+			atom->string = malloc(24);
+			atom->alloc_type = ALLOC_MALLOC;
+			snprintf(atom->string, 24, "[%" DW_PR_DSd "]%c",
+				 repeat,
+				 list_entry(atom->list.next, struct type_atom,
+					    list)->tag == DW_TAG_array_type ?
+				 '\0' : ' ');
+			break;
+
+		case DW_TAG_const_type:
+			atom->string = "const ";
+			atom->alloc_type = ALLOC_STATIC;
+			break;
+
+		case DW_TAG_base_type:
+		case DW_TAG_structure_type:
+			retval = dwarf_diename(type_die, &base_type_name, NULL);
+			if (retval == DW_DLV_NO_ENTRY) {
+				fprintf(stderr, "Error: expected this type DIE to have a name.\n");
+				print_die_info(dwarf, type_die);
+				abort();
+			}
+
+			atom->string = malloc(strlen(base_type_name + 2));
+			atom->alloc_type = ALLOC_MALLOC;
+			sprintf(atom->string, "%s ", base_type_name);
+			dwarf_dealloc(dwarf, base_type_name, DW_DLA_STRING);
+			break;
+
+		default:
+			dwarf_get_TAG_name(tag, &tag_name);
+			fprintf(stderr,
+				"Error: unsupported *_type DIE type \"%s\", please extend the code.\n",
+				tag_name);
+			print_die_info(dwarf, type_die);
+			abort();
+		}
+
+		retval = dwarf_attr(type_die, DW_AT_type, &attr, NULL);
+		if (retval == DW_DLV_NO_ENTRY) {
+			/* we've reached the end of the type chain */
+			if (tag == DW_TAG_pointer_type) {
+				type.format = FORMAT_P;
+			} else if (tag == DW_TAG_structure_type) {
+				type.format = FORMAT_STRUCT;
+			} else {
+				Dwarf_Unsigned encoding;
+
+				if (dwarf_attr(type_die, DW_AT_encoding, &attr, NULL) == DW_DLV_NO_ENTRY) {
+					fprintf(stderr, "Error: expected leaf *_type DIE to have an encoding\n");
+					print_die_info(dwarf, type_die);
+					abort();
+				}
+				dwarf_formudata(attr, &encoding, NULL);
+				switch (encoding) {
+					const char *ate_name;
+
+				case DW_ATE_float:
+					type.format = FORMAT_F;
+					break;
+				case DW_ATE_signed:
+					type.format = FORMAT_D;
+					break;
+				case DW_ATE_unsigned:
+					type.format = FORMAT_U;
+					break;
+				case DW_ATE_signed_char:
+					type.format = FORMAT_C;
+					break;
+				default:
+					dwarf_get_ATE_name(encoding, &ate_name);
+					fprintf(stderr,
+						"Error: unsupported encoding \"%s\", please extend the code.\n",
+						ate_name);
+					print_die_info(dwarf, type_die);
+					abort();
+				}
+			}
+
+			if (dwarf_attr(type_die, DW_AT_byte_size, &attr, NULL) == DW_DLV_NO_ENTRY) {
+				fprintf(stderr, "Error: expected leaf *_type DIE to have a byte_size\n");
+				print_die_info(dwarf, type_die);
+				abort();
+			}
+			dwarf_formudata(attr, &type.size, NULL);
+
+			dwarf_dealloc(dwarf, type_die, DW_DLA_DIE);
+			break;
+		} else {
+			dwarf_dealloc(dwarf, type_die, DW_DLA_DIE);
+		}
+	}
+
+	/* print and destroy the repr list */
+	struct type_atom *pos, *n;
+	list_for_each_entry_safe(pos, n, &type.repr, list) {
+		printf("%s", pos->string);
+		switch (pos->alloc_type) {
+		case ALLOC_DWARF:
+			dwarf_dealloc(dwarf, pos->string, DW_DLA_STRING);
+			break;
+		case ALLOC_MALLOC:
+			free(pos->string);
+			break;
+		case ALLOC_STATIC:
+			break;
+		default:
+			fprintf(stderr,
+				"Error: unhandled alloc_type \"%u\", please extend the code.\n",
+				pos->alloc_type);
+			abort();
+		}
+		free(pos);
+	}
+	printf("\n");
+	printf("address: %p repeat: %u indir_nb: %u format: %u size: %" DW_PR_DUu "\n",
+	       type.address, type.repeat, type.indir_nb, type.format,
+	       type.size);
+}
+
+
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc, Dwarf_Die *result)
 {
 	Dwarf_Die child, sibling;
-	Dwarf_Error derr;
 	int retval;
 
-	foreach_child(dwarf, cu_die, child, sibling, retval, derr) {
+	foreach_child(dwarf, cu_die, child, sibling, retval) {
 		Dwarf_Half tag;
 		Dwarf_Addr retpc;
 
-		if (dwarf_tag(child, &tag, &derr) != DW_DLV_OK) {
-			fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-				__LINE__, dwarf_errmsg(derr));
-			abort();
-		}
+		dwarf_tag(child, &tag, NULL);
 		if (tag != DW_TAG_subprogram) {
 			continue;
 		}
 
 		/* low_pc/high_pc case */
-		retval = dwarf_lowpc(child, &retpc, &derr);
-		if (retval == DW_DLV_ERROR) {
-			fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-				__LINE__, dwarf_errmsg(derr));
-			abort();
-		} else if (retval == DW_DLV_OK) {
+		retval = dwarf_lowpc(child, &retpc, NULL);
+		if (retval == DW_DLV_OK) {
 			if (pc < retpc) {
 				continue;
 			}
 
-			retval = dwarf_highpc(child, &retpc, &derr);
-			if (retval == DW_DLV_ERROR) {
-				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-					__LINE__, dwarf_errmsg(derr));
-				abort();
-			} else if (retval == DW_DLV_OK) {
+			retval = dwarf_highpc(child, &retpc, NULL);
+			if (retval == DW_DLV_OK) {
 				if (pc > retpc) {
 					continue;
 				}
@@ -295,118 +573,6 @@ int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc, Dw
 		 * if the control flow makes it here. For completeness, we
 		 * could instead check that this is really the case. */
 	}
-	if (retval == DW_DLV_ERROR) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n", __LINE__, dwarf_errmsg(derr));
-		abort();
-	}
 
 	return -1;
-}
-
-
-void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
-{
-	Dwarf_Half tag;
-	Dwarf_Error derr;
-	Dwarf_Off global_off, cu_off;
-	Dwarf_Attribute *attrbuf;
-	Dwarf_Signed attrcount;
-	const char *name;
-	int retval;
-
-	if (dwarf_die_offsets(die, &global_off, &cu_off, &derr) != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-			__LINE__, dwarf_errmsg(derr));
-		abort();
-	}
-
-	if (dwarf_tag(die, &tag, &derr) != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-			__LINE__, dwarf_errmsg(derr));
-		abort();
-	}
-
-	if (dwarf_get_TAG_name(tag, &name) != DW_DLV_OK) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-			__LINE__, dwarf_errmsg(derr));
-		abort();
-	}
-
-	printf("<0x%016" DW_PR_DUx "> <0x%016" DW_PR_DUx "> %s\n", global_off, cu_off, name);
-
-	retval = dwarf_attrlist(die, &attrbuf, &attrcount, &derr);
-	if (retval == DW_DLV_ERROR) {
-		fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-			__LINE__, dwarf_errmsg(derr));
-		abort();
-	} else if (retval == DW_DLV_OK) {
-		int i;
-
-		for (i = 0; i < attrcount; i++) {
-			Dwarf_Half form, at;
-			const char *form_name, *attr_name;
-
-			if (dwarf_whatform(attrbuf[i], &form, &derr) != DW_DLV_OK) {
-				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-					__LINE__, dwarf_errmsg(derr));
-				abort();
-			}
-
-			if (dwarf_get_FORM_name(form, &form_name) != DW_DLV_OK) {
-				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-					__LINE__, dwarf_errmsg(derr));
-				abort();
-			}
-
-			if (dwarf_whatattr(attrbuf[i], &at, &derr) != DW_DLV_OK) {
-				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-					__LINE__, dwarf_errmsg(derr));
-				abort();
-			}
-			if (dwarf_get_AT_name(at, &attr_name) != DW_DLV_OK) {
-				fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-					__LINE__, dwarf_errmsg(derr));
-				abort();
-			}
-
-			printf("    %s (%s)", attr_name, form_name);
-
-			switch (form) {
-				char *retstring;
-				Dwarf_Unsigned retudata;
-				Dwarf_Signed retsdata;
-
-			case DW_FORM_strp:
-			case DW_FORM_string:
-				if (dwarf_formstring(attrbuf[i], &retstring, &derr) != DW_DLV_OK) {
-					fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-						__LINE__, dwarf_errmsg(derr));
-					abort();
-				}
-				printf(" = %s", retstring);
-				break;
-
-			case DW_FORM_data1:
-			case DW_FORM_data2:
-			case DW_FORM_data4:
-			case DW_FORM_data8:
-				if (dwarf_formudata(attrbuf[i], &retudata, &derr) != DW_DLV_OK) {
-					fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-						__LINE__, dwarf_errmsg(derr));
-					abort();
-				}
-				if (dwarf_formsdata(attrbuf[i], &retsdata, &derr) != DW_DLV_OK) {
-					fprintf(stderr, "Error: at line %d, libdwarf says: %s\n",
-						__LINE__, dwarf_errmsg(derr));
-					abort();
-				}
-				printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata, retsdata);
-				break;
-			}
-			printf("\n");
-
-			dwarf_dealloc(dwarf, attrbuf[i], DW_DLA_ATTR);
-		}
-		dwarf_dealloc(dwarf, attrbuf, DW_DLA_LIST);
-	}
 }
