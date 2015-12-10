@@ -11,7 +11,7 @@
 #include <libelf.h>
 #include <gelf.h>
 #include <libdwarf/libdwarf.h>
-#include <dwarf.h>
+#include <libdwarf/dwarf.h>
 
 #include "list.h"
 #include "util.h"
