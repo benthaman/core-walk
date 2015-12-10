@@ -28,7 +28,8 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
 
-int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc, Dwarf_Die *result);
+int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
+			  Dwarf_Die *result);
 
 
 int main(int argc, char *argv[])
@@ -66,30 +67,38 @@ int main(int argc, char *argv[])
 	}
 
 	if (elf_version(EV_CURRENT) == EV_NONE) {
-		fprintf(stderr, "Error: ELF library initialization failed: %s\n", elf_errmsg(-1));
+		fprintf(stderr,
+			"Error: ELF library initialization failed: %s\n",
+			elf_errmsg(-1));
 		return EXIT_FAILURE;
 	}
 
-	dwarf_record_cmdline_options((Dwarf_Cmdline_Options) {.check_verbose_mode = false});
+	dwarf_record_cmdline_options(
+		(Dwarf_Cmdline_Options) {.check_verbose_mode = false});
 
 	if ((fd = open(objname, O_RDONLY, 0)) == -1) {
-		fprintf(stderr, "Error: open \"%s\" failed: %s\n", objname, strerror(errno));
+		fprintf(stderr, "Error: open \"%s\" failed: %s\n", objname,
+			strerror(errno));
 		abort();
 	}
 
 	if ((elf = elf_begin(fd, ELF_C_READ, NULL)) == NULL) {
-		fprintf(stderr, "Error: at line %d, libelf says: %s\n", __LINE__, elf_errmsg(-1));
+		fprintf(stderr, "Error: at line %d, libelf says: %s\n",
+			__LINE__, elf_errmsg(-1));
 		abort();
 	}
 
 	if (elf_kind(elf) != ELF_K_ELF) {
-		fprintf(stderr, "Error: \"%s\" is not an ELF object.\n", objname);
+		fprintf(stderr, "Error: \"%s\" is not an ELF object.\n",
+			objname);
 		abort();
 	}
 
 	retval = dwarf_elf_init(elf, DW_DLC_READ, NULL, NULL, &dwarf, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: \"%s\" does not contain debug information.\n", objname);
+		fprintf(stderr,
+			"Error: \"%s\" does not contain debug information.\n",
+			objname);
 		abort();
 	}
 
@@ -97,7 +106,9 @@ int main(int argc, char *argv[])
 	 * symbol instead of address */
 	retval = dwarf_get_aranges(dwarf, &aranges, &ar_cnt, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: \"%s\" does not contain a .debug_aranges section.\n", objname);
+		fprintf(stderr,
+			"Error: \"%s\" does not contain a .debug_aranges section.\n",
+			objname);
 		abort();
 	}
 
@@ -134,10 +145,12 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 	int retval;
 
 	/* lookup the CU using the .debug_aranges section */
-	retval = dwarf_get_arange(aranges, ar_cnt, call->pc, &cu_arange, NULL);
+	retval = dwarf_get_arange(aranges, ar_cnt, call->pc, &cu_arange,
+				  NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: no arange entry found for the following call:\n");
-		fprintf(stderr, "[<%016lx>] %s\n", call->pc, call->symbol); 
+		fprintf(stderr,
+			"Error: no arange entry found for the following call:\n");
+		fprintf(stderr, "[<%016lx>] %s\n", call->pc, call->symbol);
 		abort();
 	}
 
@@ -149,7 +162,8 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 
 	retval = dwarf_srclang(cu_die, &lang, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: expected CU DIE to contain a language attribute.\n");
+		fprintf(stderr,
+			"Error: expected CU DIE to contain a language attribute.\n");
 		print_die_info(dwarf, cu_die);
 		abort();
 	} else if (lang == DW_LANG_Mips_Assembler) {
@@ -162,8 +176,10 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 	/* lookup the subprogram DIE in the CU */
 	retval = find_subprogram_by_pc(dwarf, cu_die, call->pc, &sp_die);
 	if (retval == -1) {
-		fprintf(stderr, "Error: no subprogram entry found for the following call:\n");
-		fprintf(stderr, "[<%016lx>] %s+0x%x\n", call->pc, call->symbol, call->offset); 
+		fprintf(stderr,
+			"Error: no subprogram entry found for the following call:\n");
+		fprintf(stderr, "[<%016lx>] %s+0x%x\n", call->pc,
+			call->symbol, call->offset);
 		abort();
 	}
 	dwarf_dealloc(dwarf, cu_die, DW_DLA_DIE);
@@ -173,12 +189,15 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 
 	retval = dwarf_diename(sp_die, &name, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: expected subprogram DIE to have a name.\n");
+		fprintf(stderr,
+			"Error: expected subprogram DIE to have a name.\n");
 		print_die_info(dwarf, sp_die);
 		abort();
 	} else {
 		if (strcmp(name, call->symbol) != 0) {
-			fprintf(stderr, "Error: wrong DIE found, expected \"%s\".\n", call->symbol);
+			fprintf(stderr,
+				"Error: wrong DIE found, expected \"%s\".\n",
+				call->symbol);
 			print_die_info(dwarf, sp_die);
 			abort();
 		}
@@ -219,7 +238,8 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 	dwarf_tag(die, &tag, NULL);
 	dwarf_get_TAG_name(tag, &name);
 
-	printf("<0x%016" DW_PR_DUx "> <0x%016" DW_PR_DUx "> %s\n", global_off, cu_off, name);
+	printf("<0x%016" DW_PR_DUx "> <0x%016" DW_PR_DUx "> %s\n", global_off,
+	       cu_off, name);
 
 	retval = dwarf_attrlist(die, &attrbuf, &attrcount, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
@@ -254,7 +274,8 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 		case DW_FORM_data8:
 			dwarf_formudata(attrbuf[i], &retudata, NULL);
 			dwarf_formsdata(attrbuf[i], &retsdata, NULL);
-			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata, retsdata);
+			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata,
+			       retsdata);
 			break;
 		}
 		printf("\n");
@@ -341,7 +362,8 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 		}
 
 		type.address = &const_value;
-	} else if (dwarf_attr(var_die, DW_AT_location, &attr, NULL) == DW_DLV_OK) {
+	} else if (dwarf_attr(var_die, DW_AT_location, &attr, NULL) ==
+		   DW_DLV_OK) {
 		/* evaluate the location expression, oh boy! */
 	}
 
@@ -349,7 +371,8 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 	atom = malloc(sizeof(*atom));
 	list_add(&atom->list, &type.repr);
 	if (dwarf_diename(var_die, &atom->string, NULL) == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: expected variable DIE to have a name.\n");
+		fprintf(stderr,
+			"Error: expected variable DIE to have a name.\n");
 		print_die_info(dwarf, var_die);
 		abort();
 	}
@@ -357,7 +380,8 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 	atom->tag = DW_TAG_variable;
 
 	if (dwarf_attr(var_die, DW_AT_type, &attr, NULL) == DW_DLV_NO_ENTRY) {
-		fprintf(stderr, "Error: expected variable DIE to have a type.\n");
+		fprintf(stderr,
+			"Error: expected variable DIE to have a type.\n");
 		print_die_info(dwarf, var_die);
 		abort();
 	}
@@ -390,21 +414,26 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			break;
 
 		case DW_TAG_array_type:
-			if (dwarf_child(type_die, &subrange_die, NULL) == DW_DLV_NO_ENTRY) {
-				fprintf(stderr, "Error: expected array_type DIE to have a subrange_type child.\n");
+			if (dwarf_child(type_die, &subrange_die, NULL) ==
+			    DW_DLV_NO_ENTRY) {
+				fprintf(stderr,
+					"Error: expected array_type DIE to have a subrange_type child.\n");
 				print_die_info(dwarf, type_die);
 				abort();
 			}
 
-			if (dwarf_attr(subrange_die, DW_AT_upper_bound, &attr, NULL) == DW_DLV_NO_ENTRY) {
-				fprintf(stderr, "Error: expected subrange_type DIE to have an upper_bound.\n");
+			if (dwarf_attr(subrange_die, DW_AT_upper_bound, &attr,
+				       NULL) == DW_DLV_NO_ENTRY) {
+				fprintf(stderr,
+					"Error: expected subrange_type DIE to have an upper_bound.\n");
 				print_die_info(dwarf, var_die);
 				abort();
 			}
 			dwarf_dealloc(dwarf, subrange_die, DW_DLA_DIE);
 			dwarf_formsdata(attr, &repeat, NULL);
 			if (repeat < 1) {
-				fprintf(stderr, "Error: expected upper_bound to be positive, got %" DW_PR_DSd ".\n",
+				fprintf(stderr,
+					"Error: expected upper_bound to be positive, got %" DW_PR_DSd ".\n",
 					repeat);
 				abort();
 			}
@@ -427,9 +456,11 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 
 		case DW_TAG_base_type:
 		case DW_TAG_structure_type:
-			retval = dwarf_diename(type_die, &base_type_name, NULL);
+			retval = dwarf_diename(type_die, &base_type_name,
+					       NULL);
 			if (retval == DW_DLV_NO_ENTRY) {
-				fprintf(stderr, "Error: expected this type DIE to have a name.\n");
+				fprintf(stderr,
+					"Error: expected this type DIE to have a name.\n");
 				print_die_info(dwarf, type_die);
 				abort();
 			}
@@ -459,8 +490,11 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			} else {
 				Dwarf_Unsigned encoding;
 
-				if (dwarf_attr(type_die, DW_AT_encoding, &attr, NULL) == DW_DLV_NO_ENTRY) {
-					fprintf(stderr, "Error: expected leaf *_type DIE to have an encoding\n");
+				if (dwarf_attr(type_die, DW_AT_encoding,
+					       &attr, NULL) ==
+				    DW_DLV_NO_ENTRY) {
+					fprintf(stderr,
+						"Error: expected leaf *_type DIE to have an encoding\n");
 					print_die_info(dwarf, type_die);
 					abort();
 				}
@@ -490,7 +524,8 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 				}
 			}
 
-			if (dwarf_attr(type_die, DW_AT_byte_size, &attr, NULL) == DW_DLV_NO_ENTRY) {
+			if (dwarf_attr(type_die, DW_AT_byte_size, &attr, NULL)
+			    == DW_DLV_NO_ENTRY) {
 				fprintf(stderr, "Error: expected leaf *_type DIE to have a byte_size\n");
 				print_die_info(dwarf, type_die);
 				abort();
@@ -532,7 +567,8 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 }
 
 
-int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc, Dwarf_Die *result)
+int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc,
+			  Dwarf_Die *result)
 {
 	Dwarf_Die child, sibling;
 	int retval;
