@@ -261,11 +261,20 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 			char *retstring;
 			Dwarf_Unsigned retudata;
 			Dwarf_Signed retsdata;
+			Dwarf_Off retoffset;
 
 		case DW_FORM_strp:
 		case DW_FORM_string:
 			dwarf_formstring(attrbuf[i], &retstring, NULL);
 			printf(" = %s", retstring);
+			break;
+
+		case DW_FORM_ref1:
+		case DW_FORM_ref2:
+		case DW_FORM_ref4:
+		case DW_FORM_ref8:
+			dwarf_formref(attrbuf[i], &retoffset, NULL);
+			printf(" = <DIE at CU offset %" DW_PR_DUx">", retoffset);
 			break;
 
 		case DW_FORM_data1:
