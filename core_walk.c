@@ -273,7 +273,8 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 		case DW_FORM_ref4:
 		case DW_FORM_ref8:
 			dwarf_formref(attrbuf[i], &retoffset, NULL);
-			printf(" = <DIE at CU offset %" DW_PR_DUx">", retoffset);
+			printf(" = <DIE at CU offset 0x%" DW_PR_DUx">",
+			       retoffset);
 			break;
 
 		case DW_FORM_data1:
