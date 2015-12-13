@@ -112,15 +112,12 @@ int main(int argc, char *argv[])
 		abort();
 	}
 
-	i = 0;
-	print_call_info(objname, dwarf, aranges, ar_cnt, &calltrace[i]);
-	/*
 	for (i = 0;
 	     i < ARRAY_SIZE(calltrace) &&
-	     print_call_info(objname, dwarf, aranges, ar_cnt, &calltrace[i]) == 0;
+		     print_call_info(objname, dwarf, aranges, ar_cnt,
+				     &calltrace[i]) == 0;
 	     i++) {
 	}
-	*/
 
 	for (i = 0; i < ar_cnt; i++) {
 		dwarf_dealloc(dwarf, aranges[i], DW_DLA_ARANGE);
