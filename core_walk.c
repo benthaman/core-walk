@@ -258,6 +258,7 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 			Dwarf_Unsigned retudata;
 			Dwarf_Signed retsdata;
 			Dwarf_Off retoffset;
+			Dwarf_Bool retflag;
 
 		case DW_FORM_strp:
 		case DW_FORM_string:
@@ -282,6 +283,11 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 			dwarf_formsdata(attrbuf[i], &retsdata, NULL);
 			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata,
 			       retsdata);
+			break;
+
+		case DW_FORM_flag:
+			dwarf_formflag(attrbuf[i], &retflag, NULL);
+			printf(" = %s", retflag ? "True" : "False");
 			break;
 		}
 		printf("\n");
