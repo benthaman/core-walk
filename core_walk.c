@@ -416,7 +416,12 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			char *base_type_name;
 
 		case DW_TAG_pointer_type:
-			atom->string = "*";
+			if (dwarf_attr(type_die, DW_AT_type, &attr, NULL) ==
+			    DW_DLV_NO_ENTRY) {
+				atom->string = "void *";
+			} else {
+				atom->string = "*";
+			}
 			atom->alloc_type = ALLOC_STATIC;
 
 			type.indir_nb++;
