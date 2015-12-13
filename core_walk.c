@@ -167,9 +167,8 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		print_die_info(dwarf, cu_die);
 		abort();
 	} else if (lang == DW_LANG_Mips_Assembler) {
-		fprintf(stderr,
-			"Warning: \"%s\" is defined in assembly source, stopping here for now.\n",
-			call->symbol);
+		printf("Info: \"%s\" is defined in assembly source, stopping here for now.\n",
+		       call->symbol);
 		return -EDOM;
 	}
 
