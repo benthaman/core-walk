@@ -295,6 +295,38 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 }
 
 
+/* retval must be free()'ed */
+__attribute__((nonnull))
+char *get_type_name(Dwarf_Debug dwarf, Dwarf_Die type_die,
+		    const char *prefix)
+{
+	int retval;
+	char *type_name;
+	char *result;
+
+	retval = dwarf_diename(type_die, &type_name, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		Dwarf_Half tag;
+		const char *tag_repr;
+
+		dwarf_tag(type_die, &tag, NULL);
+		dwarf_get_TAG_name(tag, &tag_repr);
+		/* skip the DW_TAG_ prefix */
+		tag_repr += 7;
+		fprintf(stderr,
+			"Error: expected %s DIE to have a name.\n", tag_repr);
+		print_die_info(dwarf, type_die);
+		abort();
+	}
+
+	result = malloc(strlen(prefix) + strlen(type_name) + 2);
+	sprintf(result, "%s%s ", prefix, type_name);
+	dwarf_dealloc(dwarf, type_name, DW_DLA_STRING);
+
+	return result;
+}
+
+
 struct type_atom {
 	struct list_head list;
 	Dwarf_Half tag;
@@ -306,34 +338,50 @@ struct type_atom {
 	} alloc_type;
 };
 
+enum formats {
+	FORMAT_X,
+	FORMAT_D,
+	FORMAT_U,
+	FORMAT_F,
+	FORMAT_P,
+	FORMAT_C,
+	FORMAT_S,
+	FORMAT_B,
+};
+
+const char* format_names[] = {
+	[FORMAT_X] = "hex",
+	[FORMAT_D] = "signed",
+	[FORMAT_U] = "unsigned",
+	[FORMAT_F] = "float",
+	[FORMAT_P] = "pointer",
+	[FORMAT_C] = "char",
+	[FORMAT_S] = "string",
+	[FORMAT_B] = "bool",
+};
 
 struct type_info {
 	struct list_head repr;
-	void *address;
+	struct type_atom *start;
 	unsigned int repeat;
-	unsigned int indir_nb;
-	enum {
-		FORMAT_D,
-		FORMAT_U,
-		FORMAT_F,
-		FORMAT_P,
-		FORMAT_C,
-		FORMAT_S,
-		FORMAT_STRUCT,
-	} format;
+	enum formats format;
 	Dwarf_Unsigned size;
+	void *address;
+	unsigned int indir_nb;
 };
 
 
-/* technically, it prints info about a "data object entry", not just "var" */
+/* technically, it prints info about a "data object entry", not just a "var" */
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 {
 	Dwarf_Attribute attr;
 	struct type_info type = {
 		.repr = LIST_HEAD_INIT(type.repr),
+		.start = NULL,
+		.repeat = 1,
+		/* todo: remove when location expression evaluation is done */
 		.address = NULL,
 		.indir_nb = 0,
-		.repeat = 1,
 	};
 	struct type_atom *atom;
 	union {
@@ -413,7 +461,6 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			Dwarf_Die subrange_die;
 			Dwarf_Signed repeat;
 			const char *tag_name;
-			char *base_type_name;
 
 		case DW_TAG_pointer_type:
 			if (dwarf_attr(type_die, DW_AT_type, &attr, NULL) ==
@@ -468,21 +515,32 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			atom->alloc_type = ALLOC_STATIC;
 			break;
 
-		case DW_TAG_base_type:
 		case DW_TAG_structure_type:
-			retval = dwarf_diename(type_die, &base_type_name,
-					       NULL);
-			if (retval == DW_DLV_NO_ENTRY) {
-				fprintf(stderr,
-					"Error: expected this type DIE to have a name.\n");
-				print_die_info(dwarf, type_die);
-				abort();
-			}
-
-			atom->string = malloc(strlen(base_type_name + 2));
+			atom->string = get_type_name(dwarf, type_die,
+						     "struct ");
 			atom->alloc_type = ALLOC_MALLOC;
-			sprintf(atom->string, "%s ", base_type_name);
-			dwarf_dealloc(dwarf, base_type_name, DW_DLA_STRING);
+			break;
+
+		case DW_TAG_typedef:
+			atom->string = get_type_name(dwarf, type_die, "");
+			atom->alloc_type = ALLOC_MALLOC;
+			if (type.start == NULL) {
+				type.start = atom;
+			}
+			break;
+
+		case DW_TAG_enumeration_type:
+			atom->string = get_type_name(dwarf, type_die,
+						     "enum ");
+			atom->alloc_type = ALLOC_MALLOC;
+			if (type.start == NULL) {
+				type.start = atom;
+			}
+			break;
+
+		case DW_TAG_base_type:
+			atom->string = get_type_name(dwarf, type_die, "");
+			atom->alloc_type = ALLOC_MALLOC;
 			break;
 
 		default:
@@ -500,7 +558,11 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			if (tag == DW_TAG_pointer_type) {
 				type.format = FORMAT_P;
 			} else if (tag == DW_TAG_structure_type) {
-				type.format = FORMAT_STRUCT;
+				type.format = FORMAT_X;
+			} else if (tag == DW_TAG_enumeration_type) {
+				/* todo: add a member to type with
+				 * DW_TAG_enumerator values */
+				type.format = FORMAT_U;
 			} else {
 				Dwarf_Unsigned encoding;
 
@@ -508,7 +570,7 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 					       &attr, NULL) ==
 				    DW_DLV_NO_ENTRY) {
 					fprintf(stderr,
-						"Error: expected leaf *_type DIE to have an encoding\n");
+						"Error: expected this leaf *_type DIE to have an encoding\n");
 					print_die_info(dwarf, type_die);
 					abort();
 				}
@@ -527,6 +589,9 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 					break;
 				case DW_ATE_signed_char:
 					type.format = FORMAT_C;
+					break;
+				case DW_ATE_boolean:
+					type.format = FORMAT_B;
 					break;
 				default:
 					dwarf_get_ATE_name(encoding, &ate_name);
@@ -552,11 +617,22 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			dwarf_dealloc(dwarf, type_die, DW_DLA_DIE);
 		}
 	}
+	if (type.start == NULL) {
+		type.start = list_first_entry(&type.repr, typeof(*type.start),
+					      list);
+	}
 
 	/* print and destroy the repr list */
 	struct type_atom *pos, *n;
+	bool print = false;
+
 	list_for_each_entry_safe(pos, n, &type.repr, list) {
-		printf("%s", pos->string);
+		if (!print && pos == type.start) {
+			print = true;
+		}
+		if (print) {
+			printf("%s", pos->string);
+		}
 		switch (pos->alloc_type) {
 		case ALLOC_DWARF:
 			dwarf_dealloc(dwarf, pos->string, DW_DLA_STRING);
@@ -575,9 +651,9 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 		free(pos);
 	}
 	printf("\n");
-	printf("address: %p repeat: %u indir_nb: %u format: %u size: %" DW_PR_DUu "\n",
-	       type.address, type.repeat, type.indir_nb, type.format,
-	       type.size);
+	printf("address: %p, repeat: %u, indir_nb: %u, format: %s, size: %" DW_PR_DUu "\n",
+	       type.address, type.repeat, type.indir_nb,
+	       format_names[type.format], type.size);
 }
 
 
