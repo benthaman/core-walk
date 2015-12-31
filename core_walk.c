@@ -370,13 +370,29 @@ const char* format_names[] = {
 	[FORMAT_B] = "bool",
 };
 
+enum locations {
+	LOC_REG,
+	LOC_MEM,
+	LOC_IMM,
+};
+
+const char* location_names[] = {
+	[LOC_REG] = "register",
+	[LOC_MEM] = "memory",
+	[LOC_IMM] = "constant",
+};
+
 struct type_info {
 	struct list_head repr;
 	struct type_atom *start;
 	unsigned int repeat;
 	enum formats format;
 	Dwarf_Unsigned size;
-	void *address;
+	enum locations loctype;
+	union {
+		char *string;
+		Dwarf_Unsigned udata;
+	} value;
 	unsigned int indir_nb;
 };
 
@@ -389,19 +405,15 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 		.repr = LIST_HEAD_INIT(type.repr),
 		.start = NULL,
 		.repeat = 1,
-		/* todo: remove when location expression evaluation is done */
-		.address = NULL,
 		.indir_nb = 0,
 	};
 	struct type_atom *atom;
-	union {
-		char *string;
-		Dwarf_Unsigned udata;
-	} const_value;
 	int retval;
 
 	if (dwarf_attr(var_die, DW_AT_const_value, &attr, NULL) == DW_DLV_OK) {
 		Dwarf_Half form;
+
+		type.loctype = LOC_IMM;
 
 		dwarf_whatform(attr, &form, NULL);
 		switch (form) {
@@ -409,14 +421,14 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 
 		case DW_FORM_strp:
 		case DW_FORM_string:
-			dwarf_formstring(attr, &const_value.string, NULL);
+			dwarf_formstring(attr, &type.value.string, NULL);
 			break;
 
 		case DW_FORM_data1:
 		case DW_FORM_data2:
 		case DW_FORM_data4:
 		case DW_FORM_data8:
-			dwarf_formudata(attr, &const_value.udata, NULL);
+			dwarf_formudata(attr, &type.value.udata, NULL);
 			break;
 
 		default:
@@ -427,8 +439,6 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 			print_die_info(dwarf, var_die);
 			abort();
 		}
-
-		type.address = &const_value;
 	} else if (dwarf_attr(var_die, DW_AT_location, &attr, NULL) ==
 		   DW_DLV_OK) {
 		/* evaluate the location expression, oh boy! */
@@ -661,8 +671,8 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 		free(pos);
 	}
 	printf("\n");
-	printf("address: %p, repeat: %u, indir_nb: %u, format: %s, size: %" DW_PR_DUu "\n",
-	       type.address, type.repeat, type.indir_nb,
+	printf("location: %s, repeat: %u, indir_nb: %u, format: %s, size: %" DW_PR_DUu "\n",
+	       location_names[type.loctype], type.repeat, type.indir_nb,
 	       format_names[type.format], type.size);
 }
 
