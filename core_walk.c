@@ -26,6 +26,7 @@ struct call_entry {
 int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		    Dwarf_Signed ar_cnt, struct call_entry *call);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
+void print_attr_info(Dwarf_Attribute attr);
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
 
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
@@ -243,65 +244,70 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 	}
 
 	for (i = 0; i < attrcount; i++) {
-		Dwarf_Half form, at;
-		const char *form_name, *attr_name;
-
-		dwarf_whatform(attrbuf[i], &form, NULL);
-		dwarf_get_FORM_name(form, &form_name);
-		dwarf_whatattr(attrbuf[i], &at, NULL);
-		dwarf_get_AT_name(at, &attr_name);
-
-		printf("    %s (%s)", attr_name, form_name);
-
-		switch (form) {
-			char *retstring;
-			Dwarf_Unsigned retudata;
-			Dwarf_Signed retsdata;
-			Dwarf_Off retoffset;
-			Dwarf_Bool retflag;
-			Dwarf_Addr retaddr;
-
-		case DW_FORM_strp:
-		case DW_FORM_string:
-			dwarf_formstring(attrbuf[i], &retstring, NULL);
-			printf(" = %s", retstring);
-			break;
-
-		case DW_FORM_ref1:
-		case DW_FORM_ref2:
-		case DW_FORM_ref4:
-		case DW_FORM_ref8:
-			dwarf_formref(attrbuf[i], &retoffset, NULL);
-			printf(" = <DIE at CU offset 0x%" DW_PR_DUx">",
-			       retoffset);
-			break;
-
-		case DW_FORM_data1:
-		case DW_FORM_data2:
-		case DW_FORM_data4:
-		case DW_FORM_data8:
-			dwarf_formudata(attrbuf[i], &retudata, NULL);
-			dwarf_formsdata(attrbuf[i], &retsdata, NULL);
-			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata,
-			       retsdata);
-			break;
-
-		case DW_FORM_flag:
-			dwarf_formflag(attrbuf[i], &retflag, NULL);
-			printf(" = %s", retflag ? "True" : "False");
-			break;
-
-		case DW_FORM_addr:
-			dwarf_formaddr(attrbuf[i], &retaddr, NULL);
-			printf(" = 0x%0*" DW_PR_DUx, (int) sizeof(Dwarf_Addr)
-			       * 2, retaddr);
-			break;
-		}
-		printf("\n");
-
+		print_attr_info(attrbuf[i]);
 		dwarf_dealloc(dwarf, attrbuf[i], DW_DLA_ATTR);
 	}
 	dwarf_dealloc(dwarf, attrbuf, DW_DLA_LIST);
+}
+
+
+void print_attr_info(Dwarf_Attribute attr)
+{
+	Dwarf_Half at, form;
+	const char *attr_name, *form_name;
+
+	dwarf_whatattr(attr, &at, NULL);
+	dwarf_get_AT_name(at, &attr_name);
+	dwarf_whatform(attr, &form, NULL);
+	dwarf_get_FORM_name(form, &form_name);
+
+	printf("    %s (%s)", attr_name, form_name);
+
+	switch (form) {
+		char *retstring;
+		Dwarf_Unsigned retudata;
+		Dwarf_Signed retsdata;
+		Dwarf_Off retoffset;
+		Dwarf_Bool retflag;
+		Dwarf_Addr retaddr;
+
+	case DW_FORM_strp:
+	case DW_FORM_string:
+		dwarf_formstring(attr, &retstring, NULL);
+		printf(" = %s", retstring);
+		break;
+
+	case DW_FORM_ref1:
+	case DW_FORM_ref2:
+	case DW_FORM_ref4:
+	case DW_FORM_ref8:
+		dwarf_formref(attr, &retoffset, NULL);
+		printf(" = <DIE at CU offset 0x%" DW_PR_DUx">",
+		       retoffset);
+		break;
+
+	case DW_FORM_data1:
+	case DW_FORM_data2:
+	case DW_FORM_data4:
+	case DW_FORM_data8:
+		dwarf_formudata(attr, &retudata, NULL);
+		dwarf_formsdata(attr, &retsdata, NULL);
+		printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata,
+		       retsdata);
+		break;
+
+	case DW_FORM_flag:
+		dwarf_formflag(attr, &retflag, NULL);
+		printf(" = %s", retflag ? "True" : "False");
+		break;
+
+	case DW_FORM_addr:
+		dwarf_formaddr(attr, &retaddr, NULL);
+		printf(" = 0x%0*" DW_PR_DUx, (int) sizeof(Dwarf_Addr)
+		       * 2, retaddr);
+		break;
+	}
+	printf("\n");
 }
 
 
