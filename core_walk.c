@@ -27,7 +27,7 @@ int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		    Dwarf_Signed ar_cnt, struct call_entry *call);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
 void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr);
-void print_locdesc(Dwarf_Locdesc *ld);
+void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld);
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
 
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
@@ -282,7 +282,7 @@ void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 		}
 		printf(" %" DW_PR_DSd " location descriptions\n", retsdata);
 		for (i = 0; i < retsdata; i++) {
-			print_locdesc(llbufs[i]);
+			print_locdesc(dwarf, llbufs[i]);
 			dwarf_dealloc(dwarf, llbufs[i]->ld_s, DW_DLA_LOC_BLOCK);
 			dwarf_dealloc(dwarf, llbufs[i], DW_DLA_LOCDESC);
 		}
@@ -306,6 +306,7 @@ void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 			Dwarf_Off retoffset;
 			Dwarf_Bool retflag;
 			Dwarf_Addr retaddr;
+			Dwarf_Half addr_size;
 
 		case DW_FORM_strp:
 		case DW_FORM_string:
@@ -339,8 +340,9 @@ void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 
 		case DW_FORM_addr:
 			dwarf_formaddr(attr, &retaddr, NULL);
-			printf(" = 0x%0*" DW_PR_DUx,
-			       2 * (int) sizeof(Dwarf_Addr), retaddr);
+			dwarf_get_address_size(dwarf, &addr_size, NULL);
+			printf(" = 0x%0*" DW_PR_DUx, 2 * (int) addr_size,
+			       retaddr);
 			break;
 		}
 		printf("\n");
@@ -368,15 +370,17 @@ const char *register_abbrev[] = {
 };
 
 
-void print_locdesc(Dwarf_Locdesc *ld)
+void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld)
 {
 	int i;
 	const char *indent;
+	Dwarf_Half addr_size;
+
+	dwarf_get_address_size(dwarf, &addr_size, NULL);
 
 	if (ld->ld_from_loclist) {
 		printf("        [0x%2$0*1$" DW_PR_DUx ", 0x%3$0*1$" DW_PR_DUx "[\n",
-		       2 * (int) sizeof(Dwarf_Addr), ld->ld_lopc,
-		       ld->ld_hipc);
+		       2 * (int) addr_size, ld->ld_lopc, ld->ld_hipc);
 		indent = "            ";
 	} else {
 		indent = "        ";
@@ -405,7 +409,7 @@ void print_locdesc(Dwarf_Locdesc *ld)
 			printf("() # %u", op - DW_OP_lit0);
 		} else if (op == DW_OP_addr) {
 			printf("(0x%0*" DW_PR_DUx ")",
-			       2 * (int) sizeof(Dwarf_Addr), arg1);
+			       2 * (int) addr_size, arg1);
 		} else if (op == DW_OP_piece) {
 			printf("(%" DW_PR_DUu ")", arg1);
 		} else if (op == DW_OP_bit_piece) {
