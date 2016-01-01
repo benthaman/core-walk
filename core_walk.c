@@ -273,6 +273,7 @@ void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 		int i;
 
 	case DW_AT_location:
+	case DW_AT_frame_base:
 		if (dwarf_loclist_n(attr, &llbufs, &retsdata, NULL) !=
 		    DW_DLV_OK) {
 			fprintf(stderr,
