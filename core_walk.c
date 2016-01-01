@@ -26,7 +26,8 @@ struct call_entry {
 int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		    Dwarf_Signed ar_cnt, struct call_entry *call);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
-void print_attr_info(Dwarf_Attribute attr);
+void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr);
+void print_locdesc(Dwarf_Locdesc *ld);
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
 
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
@@ -38,6 +39,8 @@ int main(int argc, char *argv[])
 	int fd, i;
 	char *objname = argv[1];
 	struct call_entry calltrace[] = {
+		/* bogus entry, good test of location descriptions */
+		{0xffffffff811e11cc, "isofs_fill_super", 2396},
 		{0xffffffff8134e51d, "sysrq_handle_crash", 0xd},
 		{0xffffffff8134eaa4, "__handle_sysrq", 0xa4},
 		{0xffffffff81362239, "serial8250_handle_port", 0x2b9},
@@ -244,14 +247,14 @@ void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die)
 	}
 
 	for (i = 0; i < attrcount; i++) {
-		print_attr_info(attrbuf[i]);
+		print_attr_info(dwarf, attrbuf[i]);
 		dwarf_dealloc(dwarf, attrbuf[i], DW_DLA_ATTR);
 	}
 	dwarf_dealloc(dwarf, attrbuf, DW_DLA_LIST);
 }
 
 
-void print_attr_info(Dwarf_Attribute attr)
+void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 {
 	Dwarf_Half at, form;
 	const char *attr_name, *form_name;
@@ -263,51 +266,153 @@ void print_attr_info(Dwarf_Attribute attr)
 
 	printf("    %s (%s)", attr_name, form_name);
 
-	switch (form) {
-		char *retstring;
-		Dwarf_Unsigned retudata;
-		Dwarf_Signed retsdata;
-		Dwarf_Off retoffset;
-		Dwarf_Bool retflag;
-		Dwarf_Addr retaddr;
+	switch(at) {
+		Dwarf_Locdesc **llbufs;
+		Dwarf_Signed len;
+		int i;
 
-	case DW_FORM_strp:
-	case DW_FORM_string:
-		dwarf_formstring(attr, &retstring, NULL);
-		printf(" = %s", retstring);
+	case DW_AT_location:
+		if (dwarf_loclist_n(attr, &llbufs, &len, NULL) != DW_DLV_OK) {
+			fprintf(stderr,
+				"Error: expected a location description\n");
+			abort();
+		}
+		printf(" %" DW_PR_DSd " location descriptions\n", len);
+		for (i = 0; i < len; i++) {
+			print_locdesc(llbufs[i]);
+			dwarf_dealloc(dwarf, llbufs[i]->ld_s, DW_DLA_LOC_BLOCK);
+			dwarf_dealloc(dwarf, llbufs[i], DW_DLA_LOCDESC);
+		}
+		dwarf_dealloc(dwarf, llbufs, DW_DLA_LIST);
 		break;
 
-	case DW_FORM_ref1:
-	case DW_FORM_ref2:
-	case DW_FORM_ref4:
-	case DW_FORM_ref8:
-		dwarf_formref(attr, &retoffset, NULL);
-		printf(" = <DIE at CU offset 0x%" DW_PR_DUx">",
-		       retoffset);
-		break;
+	default:
+		switch (form) {
+			char *retstring;
+			Dwarf_Unsigned retudata;
+			Dwarf_Signed retsdata;
+			Dwarf_Off retoffset;
+			Dwarf_Bool retflag;
+			Dwarf_Addr retaddr;
 
-	case DW_FORM_data1:
-	case DW_FORM_data2:
-	case DW_FORM_data4:
-	case DW_FORM_data8:
-		dwarf_formudata(attr, &retudata, NULL);
-		dwarf_formsdata(attr, &retsdata, NULL);
-		printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata,
-		       retsdata);
-		break;
+		case DW_FORM_strp:
+		case DW_FORM_string:
+			dwarf_formstring(attr, &retstring, NULL);
+			printf(" = %s", retstring);
+			break;
 
-	case DW_FORM_flag:
-		dwarf_formflag(attr, &retflag, NULL);
-		printf(" = %s", retflag ? "True" : "False");
-		break;
+		case DW_FORM_ref1:
+		case DW_FORM_ref2:
+		case DW_FORM_ref4:
+		case DW_FORM_ref8:
+			dwarf_formref(attr, &retoffset, NULL);
+			printf(" = <DIE at CU offset 0x%" DW_PR_DUx">",
+			       retoffset);
+			break;
 
-	case DW_FORM_addr:
-		dwarf_formaddr(attr, &retaddr, NULL);
-		printf(" = 0x%0*" DW_PR_DUx, (int) sizeof(Dwarf_Addr)
-		       * 2, retaddr);
-		break;
+		case DW_FORM_data1:
+		case DW_FORM_data2:
+		case DW_FORM_data4:
+		case DW_FORM_data8:
+			dwarf_formsdata(attr, &retsdata, NULL);
+			dwarf_formudata(attr, &retudata, NULL);
+			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata,
+			       retsdata);
+			break;
+
+		case DW_FORM_flag:
+			dwarf_formflag(attr, &retflag, NULL);
+			printf(" = %s", retflag ? "True" : "False");
+			break;
+
+		case DW_FORM_addr:
+			dwarf_formaddr(attr, &retaddr, NULL);
+			printf(" = 0x%0*" DW_PR_DUx,
+			       2 * (int) sizeof(Dwarf_Addr), retaddr);
+			break;
+		}
+		printf("\n");
 	}
-	printf("\n");
+}
+
+
+const char *register_abbrev[] = {
+	[0] = "%rax",
+	[1] = "%rdx",
+	[2] = "%rcx",
+	[3] = "%rbx",
+	[4] = "%rsi",
+	[5] = "%rdi",
+	[6] = "%rbp",
+	[7] = "%rsp",
+	[8] = "%r8",
+	[9] = "%r9",
+	[10] = "%r10",
+	[11] = "%r11",
+	[12] = "%r12",
+	[13] = "%r13",
+	[14] = "%r14",
+	[15] = "%r15",
+};
+
+
+void print_locdesc(Dwarf_Locdesc *ld)
+{
+	int i;
+	const char *indent;
+
+	if (ld->ld_from_loclist) {
+		printf("        [0x%2$0*1$" DW_PR_DUx ", 0x%3$0*1$" DW_PR_DUx "[\n",
+		       2 * (int) sizeof(Dwarf_Addr), ld->ld_lopc,
+		       ld->ld_hipc);
+		indent = "            ";
+	} else {
+		indent = "        ";
+	}
+
+	for (i = 0; i < ld->ld_cents; i++) {
+		Dwarf_Small op = ld->ld_s[i].lr_atom;
+		Dwarf_Unsigned arg1 = ld->ld_s[i].lr_number,
+			       arg2 = ld->ld_s[i].lr_number2;
+		const char *op_name;
+
+		dwarf_get_OP_name(op, &op_name);
+		printf("%s%s", indent, op_name);
+
+		if (op >= DW_OP_reg0 && op <= DW_OP_reg15) {
+			printf("() # %s", register_abbrev[op - DW_OP_reg0]);
+		} else if (op >= DW_OP_breg0 && op <= DW_OP_breg15) {
+			printf("(%+" DW_PR_DSd ") # %s0x%lx(%s)",
+			       arg1, (Dwarf_Signed) arg1 < 0 ? "-" : "",
+			       labs(arg1), register_abbrev[op - DW_OP_breg0]);
+		} else if (op == DW_OP_stack_value) {
+			printf("()");
+		} else if (op == DW_OP_fbreg) {
+			printf("(%+" DW_PR_DSd ")", ld->ld_s[i].lr_number);
+		} else if (op >= DW_OP_lit0 && op <= DW_OP_lit31) {
+			printf("() # %u", op - DW_OP_lit0);
+		} else if (op == DW_OP_addr) {
+			printf("(0x%0*" DW_PR_DUx ")",
+			       2 * (int) sizeof(Dwarf_Addr), arg1);
+		} else if (op == DW_OP_piece) {
+			printf("(%" DW_PR_DUu ")", arg1);
+		} else if (op == DW_OP_bit_piece) {
+			printf("(%" DW_PR_DUu ", %" DW_PR_DUu ")", arg1,
+			       arg2);
+		} else if (op >= DW_OP_const1u && op <= DW_OP_consts) {
+			if (op % 2 == 0) {
+				printf("(%1$" DW_PR_DUu ") # %1$" DW_PR_DUu,
+				       arg1);
+			} else {
+				printf("(%1$" DW_PR_DSd ") # %1$" DW_PR_DSd,
+				       (Dwarf_Signed) arg1);
+			}
+		} else {
+			printf(" ? ");
+		}
+
+		printf("\n");
+	}
 }
 
 
