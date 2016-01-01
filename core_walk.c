@@ -268,29 +268,40 @@ void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 
 	switch(at) {
 		Dwarf_Locdesc **llbufs;
-		Dwarf_Signed len;
+		Dwarf_Signed retsdata;
+		Dwarf_Unsigned retudata;
 		int i;
 
 	case DW_AT_location:
-		if (dwarf_loclist_n(attr, &llbufs, &len, NULL) != DW_DLV_OK) {
+		if (dwarf_loclist_n(attr, &llbufs, &retsdata, NULL) !=
+		    DW_DLV_OK) {
 			fprintf(stderr,
 				"Error: expected a location description\n");
 			abort();
 		}
-		printf(" %" DW_PR_DSd " location descriptions\n", len);
-		for (i = 0; i < len; i++) {
+		printf(" %" DW_PR_DSd " location descriptions\n", retsdata);
+		for (i = 0; i < retsdata; i++) {
 			print_locdesc(llbufs[i]);
 			dwarf_dealloc(dwarf, llbufs[i]->ld_s, DW_DLA_LOC_BLOCK);
 			dwarf_dealloc(dwarf, llbufs[i], DW_DLA_LOCDESC);
 		}
 		dwarf_dealloc(dwarf, llbufs, DW_DLA_LIST);
 		break;
+	
+	case DW_AT_language:
+		dwarf_formudata(attr, &retudata, NULL);
+		printf(" = 0x%" DW_PR_DUx "\n", retudata);
+		break;
+
+	case DW_AT_decl_file:
+	case DW_AT_decl_line:
+		dwarf_formudata(attr, &retudata, NULL);
+		printf(" = %" DW_PR_DUu "\n", retudata);
+		break;
 
 	default:
 		switch (form) {
 			char *retstring;
-			Dwarf_Unsigned retudata;
-			Dwarf_Signed retsdata;
 			Dwarf_Off retoffset;
 			Dwarf_Bool retflag;
 			Dwarf_Addr retaddr;
@@ -316,8 +327,8 @@ void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 		case DW_FORM_data8:
 			dwarf_formsdata(attr, &retsdata, NULL);
 			dwarf_formudata(attr, &retudata, NULL);
-			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retudata,
-			       retsdata);
+			printf(" = %" DW_PR_DSd "/%" DW_PR_DUu, retsdata,
+			       retudata);
 			break;
 
 		case DW_FORM_flag:
