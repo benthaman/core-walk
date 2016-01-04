@@ -23,8 +23,8 @@ struct call_entry {
 	int offset;
 };
 
-int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
-		    Dwarf_Signed ar_cnt, struct call_entry *call);
+int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges, Dwarf_Signed
+		    ar_cnt, struct call_entry *call);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
 void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr);
 void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld);
@@ -117,9 +117,8 @@ int main(int argc, char *argv[])
 	}
 
 	for (i = 0;
-	     i < ARRAY_SIZE(calltrace) &&
-		     print_call_info(objname, dwarf, aranges, ar_cnt,
-				     &calltrace[i]) == 0;
+	     i < ARRAY_SIZE(calltrace) && print_call_info(
+		     dwarf, aranges, ar_cnt, &calltrace[i]) == 0;
 	     i++) {
 	}
 
@@ -135,7 +134,7 @@ int main(int argc, char *argv[])
 }
 
 
-int print_call_info(char *objname, Dwarf_Debug dwarf, Dwarf_Arange *aranges,
+int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		    Dwarf_Signed ar_cnt, struct call_entry *call)
 {
 	Dwarf_Arange cu_arange;
