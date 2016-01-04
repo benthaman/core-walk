@@ -24,7 +24,7 @@ struct call_entry {
 };
 
 int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges, Dwarf_Signed
-		    ar_cnt, struct call_entry *call);
+		    ar_cnt, const struct call_entry *call);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
 void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr);
 void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld);
@@ -135,7 +135,7 @@ int main(int argc, char *argv[])
 
 
 int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
-		    Dwarf_Signed ar_cnt, struct call_entry *call)
+		    Dwarf_Signed ar_cnt, const struct call_entry *call)
 {
 	Dwarf_Arange cu_arange;
 	Dwarf_Unsigned lang;
