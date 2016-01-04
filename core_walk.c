@@ -28,6 +28,8 @@ int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges, Dwarf_Signed
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
 void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr);
 void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld);
+void print_cfi(Dwarf_Debug dwarf, const struct call_entry *call);
+void print_regtable_entry(const char *regname, Dwarf_Regtable_Entry3 *entry);
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
 
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
@@ -203,6 +205,9 @@ int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		dwarf_dealloc(dwarf, name, DW_DLA_STRING);
 	}
 
+	printf("Call frame information\n");
+	print_cfi(dwarf, call);
+
 	/* print parameters and variables */
 	Dwarf_Die child, sibling;
 
@@ -279,7 +284,7 @@ void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr)
 				"Error: expected a location description\n");
 			abort();
 		}
-		printf(" %" DW_PR_DSd " location descriptions\n", retsdata);
+		printf(" %" DW_PR_DSd " location descriptions:\n", retsdata);
 		for (i = 0; i < retsdata; i++) {
 			print_locdesc(dwarf, llbufs[i]);
 			dwarf_dealloc(dwarf, llbufs[i]->ld_s, DW_DLA_LOC_BLOCK);
@@ -366,6 +371,7 @@ const char *register_abbrev[] = {
 	[13] = "%r13",
 	[14] = "%r14",
 	[15] = "%r15",
+	[16] = "retaddr",
 };
 
 
@@ -427,6 +433,108 @@ void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld)
 		}
 
 		printf("\n");
+	}
+}
+
+
+void print_cfi(Dwarf_Debug dwarf, const struct call_entry *call)
+{
+	Dwarf_Cie *cie_list;
+	Dwarf_Fde *fde_list, fde;
+	Dwarf_Signed cie_count, fde_count;
+	Dwarf_Addr lopc, hipc, row_pc;
+	Dwarf_Regtable3 reg_table;
+	Dwarf_Half addr_size;
+	int width, i;
+
+	if (dwarf_get_fde_list_eh(dwarf, &cie_list, &cie_count, &fde_list,
+				  &fde_count, NULL) != DW_DLV_OK) {
+		fprintf(stderr,
+			"Error: could not retrieve FDE list from eh_frame section\n");
+		abort();
+	}
+
+	dwarf_get_fde_at_pc(fde_list, call->pc, &fde, &lopc, &hipc, NULL);
+
+	reg_table.rt3_reg_table_size = ARRAY_SIZE(register_abbrev);
+	reg_table.rt3_rules = malloc(sizeof(Dwarf_Regtable_Entry3) *
+				     reg_table.rt3_reg_table_size);
+	dwarf_get_fde_info_for_all_regs3(fde, call->pc, &reg_table, &row_pc,
+					 NULL);
+
+	dwarf_get_address_size(dwarf, &addr_size, NULL);
+	width = 2 * (int) addr_size;
+	printf("at pc = 0x%0*lx\n", width, call->pc);
+	printf("    FDE low pc = 0x%0*" DW_PR_DUx "\n", width, lopc);
+	printf("    FDE high pc = 0x%0*" DW_PR_DUx "\n", width, hipc);
+	printf("    regtable row low pc = 0x%0*" DW_PR_DUx "\n", width,
+	       row_pc);
+	printf("    value of register in previous frame:\n");
+	print_regtable_entry("CFA", &reg_table.rt3_cfa_rule);
+	for (i = 0; i < reg_table.rt3_reg_table_size; i++) {
+		print_regtable_entry(register_abbrev[i],
+				     &reg_table.rt3_rules[i]);
+	}
+
+	free(reg_table.rt3_rules);
+	dwarf_fde_cie_list_dealloc(dwarf, cie_list, cie_count, fde_list,
+				   fde_count);
+}
+
+
+void print_regtable_entry(const char *regname, Dwarf_Regtable_Entry3 *entry)
+{
+	/* register rule type name */
+	const char *rr_type_name[] = {
+#define name_entry(macro) [macro] = #macro
+		name_entry(DW_EXPR_OFFSET),
+		name_entry(DW_EXPR_VAL_OFFSET),
+		name_entry(DW_EXPR_EXPRESSION),
+		name_entry(DW_EXPR_VAL_EXPRESSION),
+	};
+
+	printf("        [%7s] ", regname);
+	switch (entry->dw_value_type) {
+	case DW_EXPR_OFFSET:
+		if (entry->dw_regnum == DW_FRAME_UNDEFINED_VAL) {
+			printf("undefined\n");
+		} else if (entry->dw_regnum == DW_FRAME_SAME_VAL) {
+			printf("same value/not preserved\n");
+		} else if (entry->dw_offset_relevant) {
+			const char *basereg;
+
+			if (entry->dw_regnum == DW_FRAME_CFA_COL3) {
+				basereg = "CFA";
+			} else {
+				if (entry->dw_regnum >
+				    ARRAY_SIZE(register_abbrev)) {
+					fprintf(stderr,
+						"Error: register number out of bounds (%u)\n",
+						entry->dw_regnum);
+					abort();
+				}
+				basereg = register_abbrev[entry->dw_regnum];
+			}
+			printf("%" DW_PR_DSd "(%s)\n",
+			       entry->dw_offset_or_block_len, basereg);
+		} else {
+			if (entry->dw_regnum > ARRAY_SIZE(register_abbrev)) {
+				fprintf(stderr,
+					"Error: register number out of bounds (%u)\n",
+					entry->dw_regnum);
+				abort();
+			}
+			printf("(%%%s)\n", register_abbrev[entry->dw_regnum]);
+		}
+		break;
+	default:
+		if (entry->dw_value_type > ARRAY_SIZE(rr_type_name)) {
+			fprintf(stderr,
+				"Error: register rule type out of bounds (%u)\n",
+				entry->dw_value_type);
+			abort();
+		}
+		printf("%s ?\n", rr_type_name[entry->dw_value_type]);
 	}
 }
 
