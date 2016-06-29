@@ -23,8 +23,8 @@ struct call_entry {
 	int offset;
 };
 
-int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges, Dwarf_Signed
-		    ar_cnt, const struct call_entry *call);
+int print_call_info(Dwarf_Debug dwarf, const struct call_entry *call,
+		    Dwarf_Die cu_die);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
 void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr);
 void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld);
@@ -32,6 +32,8 @@ void print_cfi(Dwarf_Debug dwarf, const struct call_entry *call);
 void print_regtable_entry(const char *regname, Dwarf_Regtable_Entry3 *entry);
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
 
+int find_cu_by_pc(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
+		  Dwarf_Signed ar_cnt, Dwarf_Addr pc, Dwarf_Die *result);
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
 			  Dwarf_Die *result);
 
@@ -65,6 +67,7 @@ int main(int argc, char *argv[])
 	Dwarf_Debug dwarf;
 	Dwarf_Arange *aranges;
 	Dwarf_Signed ar_cnt;
+	Dwarf_Die cu_die;
 
 	if (argc != 2) {
 		fprintf(stderr, "Wrong number of arguments.\n");
@@ -118,10 +121,37 @@ int main(int argc, char *argv[])
 		abort();
 	}
 
-	for (i = 0;
-	     i < ARRAY_SIZE(calltrace) && print_call_info(
-		     dwarf, aranges, ar_cnt, &calltrace[i]) == 0;
-	     i++) {
+	for (i = 0; i < ARRAY_SIZE(calltrace); i++) {
+		const struct call_entry *call = &calltrace[i];
+		Dwarf_Unsigned lang;
+
+		retval = find_cu_by_pc(dwarf, aranges, ar_cnt, call->pc,
+				       &cu_die);
+		if (retval == -1) {
+			fprintf(stderr,
+				"Error: no arange entry found for the following call:\n");
+			fprintf(stderr, "[<%016lx>] %s\n", call->pc, call->symbol);
+			abort();
+		}
+
+		printf("Compilation Unit\n");
+		print_die_info(dwarf, cu_die);
+
+		retval = dwarf_srclang(cu_die, &lang, NULL);
+		if (retval == DW_DLV_NO_ENTRY) {
+			fprintf(stderr,
+				"Error: expected CU DIE to contain a language attribute.\n");
+			print_die_info(dwarf, cu_die);
+			abort();
+		} else if (lang == DW_LANG_Mips_Assembler) {
+			printf("Info: \"%s\" is defined in assembly source, stopping here for now.\n",
+			       call->symbol);
+			break;
+		}
+
+		print_call_info(dwarf, call, cu_die);
+
+		dwarf_dealloc(dwarf, cu_die, DW_DLA_DIE);
 	}
 
 	for (i = 0; i < ar_cnt; i++) {
@@ -136,43 +166,32 @@ int main(int argc, char *argv[])
 }
 
 
-int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
-		    Dwarf_Signed ar_cnt, const struct call_entry *call)
+/* result must be free'ed using dwarf_dealloc(dwarf, result, DW_DLA_DIE) */
+int find_cu_by_pc(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
+		  Dwarf_Signed ar_cnt, Dwarf_Addr pc, Dwarf_Die *result)
 {
 	Dwarf_Arange cu_arange;
-	Dwarf_Unsigned lang;
 	Dwarf_Off cu_doff;
-	Dwarf_Die cu_die, sp_die;
-	char *name;
 	int retval;
 
 	/* lookup the CU using the .debug_aranges section */
-	retval = dwarf_get_arange(aranges, ar_cnt, call->pc, &cu_arange,
-				  NULL);
+	retval = dwarf_get_arange(aranges, ar_cnt, pc, &cu_arange, NULL);
 	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr,
-			"Error: no arange entry found for the following call:\n");
-		fprintf(stderr, "[<%016lx>] %s\n", call->pc, call->symbol);
-		abort();
+		return -1;
 	}
 
 	dwarf_get_cu_die_offset(cu_arange, &cu_doff, NULL);
-	dwarf_offdie(dwarf, cu_doff, &cu_die, NULL);
+	dwarf_offdie(dwarf, cu_doff, result, NULL);
+	return 0;
+}
 
-	printf("Compilation Unit\n");
-	print_die_info(dwarf, cu_die);
 
-	retval = dwarf_srclang(cu_die, &lang, NULL);
-	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr,
-			"Error: expected CU DIE to contain a language attribute.\n");
-		print_die_info(dwarf, cu_die);
-		abort();
-	} else if (lang == DW_LANG_Mips_Assembler) {
-		printf("Info: \"%s\" is defined in assembly source, stopping here for now.\n",
-		       call->symbol);
-		return -EDOM;
-	}
+int print_call_info(Dwarf_Debug dwarf, const struct call_entry *call,
+		    Dwarf_Die cu_die)
+{
+	Dwarf_Die sp_die;
+	char *name;
+	int retval;
 
 	/* lookup the subprogram DIE in the CU */
 	retval = find_subprogram_by_pc(dwarf, cu_die, call->pc, &sp_die);
@@ -183,7 +202,6 @@ int print_call_info(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 			call->symbol, call->offset);
 		abort();
 	}
-	dwarf_dealloc(dwarf, cu_die, DW_DLA_DIE);
 
 	printf("Subprogram\n");
 	print_die_info(dwarf, sp_die);
