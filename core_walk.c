@@ -409,7 +409,7 @@ void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld)
 		} else if (op == DW_OP_stack_value) {
 			printf("()");
 		} else if (op == DW_OP_fbreg) {
-			printf("(%+" DW_PR_DSd ")", ld->ld_s[i].lr_number);
+			printf("(%1$+" DW_PR_DSd ") # %1$" DW_PR_DSd "(CFA)", arg1);
 		} else if (op >= DW_OP_lit0 && op <= DW_OP_lit31) {
 			printf("() # %u", op - DW_OP_lit0);
 		} else if (op == DW_OP_addr) {
