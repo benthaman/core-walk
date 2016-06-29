@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,10 +39,33 @@ int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
 			  Dwarf_Die *result);
 
 
+void usage(FILE *stream, const char *progname)
+{
+	fprintf(stream,
+		"Usage: %s [OPTION]... <vmlinux>\n"
+		"\n"
+		"Options:\n", progname);
+	fprintf(stream,
+		"General options:\n"
+		"  -h, --help            Print this help message and exit.\n"
+		"  -v, --verbose         Print content of debugging information.\n");
+}
+
+
 int main(int argc, char *argv[])
 {
+	int c;
+	extern int optind;
+	bool verbose = false;
+	char *objname;
 	int fd, i;
-	char *objname = argv[1];
+
+	Elf *elf;
+
+	Dwarf_Debug dwarf;
+	Dwarf_Arange *aranges;
+	Dwarf_Signed ar_cnt;
+
 	struct call_entry calltrace[] = {
 		/* bogus entry, good test of location descriptions */
 		{0xffffffff811e11cc, "isofs_fill_super", 2396},
@@ -60,19 +84,47 @@ int main(int argc, char *argv[])
 		{0xffffffff81001186, "cpu_idle", 0x66},
 		{0xffffffff8171d40c, "start_secondary", 0x232},
 	};
+
 	int retval;
 
-	Elf *elf;
+	do {
+		static struct option long_options[] = {
+			{"help", no_argument, 0, 'h'},
+			{"verbose", no_argument, 0, 'v'},
+			{0, 0, 0, 0}
+		};
 
-	Dwarf_Debug dwarf;
-	Dwarf_Arange *aranges;
-	Dwarf_Signed ar_cnt;
+		c = getopt_long(argc, argv, "hv", long_options, NULL);
 
-	if (argc != 2) {
+		switch (c) {
+		case -1:
+			break;
+
+		case 'h':
+			usage(stdout, argv[0]);
+			exit(EXIT_SUCCESS);
+			break;
+
+		case 'v':
+			verbose = true;
+			break;
+
+		case '?':
+			usage(stderr, argv[0]);
+			exit(EXIT_FAILURE);
+
+		default:
+			fprintf(stderr, "Option parse error, retval: %d\n", c);
+			abort();
+		}
+	} while (c != -1);
+
+	if (argc - optind != 1) {
 		fprintf(stderr, "Wrong number of arguments.\n");
-		fprintf(stderr, "Usage: %s <vmlinux>\n", argv[0]);
+		usage(stderr, argv[0]);
 		return EXIT_FAILURE;
 	}
+	objname = argv[optind];
 
 	if (elf_version(EV_CURRENT) == EV_NONE) {
 		fprintf(stderr,
@@ -135,8 +187,10 @@ int main(int argc, char *argv[])
 			abort();
 		}
 
-		printf("Compilation Unit\n");
-		print_die_info(dwarf, cu_die);
+		if (verbose) {
+			printf("Compilation Unit\n");
+			print_die_info(dwarf, cu_die);
+		}
 
 		retval = dwarf_srclang(cu_die, &lang, NULL);
 		if (retval == DW_DLV_NO_ENTRY) {
@@ -161,8 +215,10 @@ int main(int argc, char *argv[])
 
 		dwarf_dealloc(dwarf, cu_die, DW_DLA_DIE);
 
-		printf("Subprogram\n");
-		print_die_info(dwarf, sp_die);
+		if (verbose) {
+			printf("Subprogram\n");
+			print_die_info(dwarf, sp_die);
+		}
 
 		retval = dwarf_diename(sp_die, &name, NULL);
 		if (retval == DW_DLV_NO_ENTRY) {
@@ -181,7 +237,9 @@ int main(int argc, char *argv[])
 			dwarf_dealloc(dwarf, name, DW_DLA_STRING);
 		}
 
-		print_call_info(dwarf, call, sp_die);
+		if (verbose) {
+			print_call_info(dwarf, call, sp_die);
+		}
 
 		dwarf_dealloc(dwarf, sp_die, DW_DLA_DIE);
 	}
