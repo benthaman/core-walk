@@ -24,7 +24,7 @@ struct call_entry {
 };
 
 int print_call_info(Dwarf_Debug dwarf, const struct call_entry *call,
-		    Dwarf_Die cu_die);
+		    Dwarf_Die sp_die);
 void print_die_info(Dwarf_Debug dwarf, Dwarf_Die die);
 void print_attr_info(Dwarf_Debug dwarf, Dwarf_Attribute attr);
 void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld);
@@ -67,7 +67,6 @@ int main(int argc, char *argv[])
 	Dwarf_Debug dwarf;
 	Dwarf_Arange *aranges;
 	Dwarf_Signed ar_cnt;
-	Dwarf_Die cu_die;
 
 	if (argc != 2) {
 		fprintf(stderr, "Wrong number of arguments.\n");
@@ -123,7 +122,9 @@ int main(int argc, char *argv[])
 
 	for (i = 0; i < ARRAY_SIZE(calltrace); i++) {
 		const struct call_entry *call = &calltrace[i];
+		Dwarf_Die cu_die, sp_die;
 		Dwarf_Unsigned lang;
+		char *name;
 
 		retval = find_cu_by_pc(dwarf, aranges, ar_cnt, call->pc,
 				       &cu_die);
@@ -149,9 +150,40 @@ int main(int argc, char *argv[])
 			break;
 		}
 
-		print_call_info(dwarf, call, cu_die);
+		retval = find_subprogram_by_pc(dwarf, cu_die, call->pc, &sp_die);
+		if (retval == -1) {
+			fprintf(stderr,
+				"Error: no subprogram entry found for the following call:\n");
+			fprintf(stderr, "[<%016lx>] %s+0x%x\n", call->pc,
+				call->symbol, call->offset);
+			abort();
+		}
 
 		dwarf_dealloc(dwarf, cu_die, DW_DLA_DIE);
+
+		printf("Subprogram\n");
+		print_die_info(dwarf, sp_die);
+
+		retval = dwarf_diename(sp_die, &name, NULL);
+		if (retval == DW_DLV_NO_ENTRY) {
+			fprintf(stderr,
+				"Error: expected subprogram DIE to have a name.\n");
+			print_die_info(dwarf, sp_die);
+			abort();
+		} else {
+			if (strcmp(name, call->symbol) != 0) {
+				fprintf(stderr,
+					"Error: wrong DIE found, expected \"%s\".\n",
+					call->symbol);
+				print_die_info(dwarf, sp_die);
+				abort();
+			}
+			dwarf_dealloc(dwarf, name, DW_DLA_STRING);
+		}
+
+		print_call_info(dwarf, call, sp_die);
+
+		dwarf_dealloc(dwarf, sp_die, DW_DLA_DIE);
 	}
 
 	for (i = 0; i < ar_cnt; i++) {
@@ -187,41 +219,9 @@ int find_cu_by_pc(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 
 
 int print_call_info(Dwarf_Debug dwarf, const struct call_entry *call,
-		    Dwarf_Die cu_die)
+		    Dwarf_Die sp_die)
 {
-	Dwarf_Die sp_die;
-	char *name;
 	int retval;
-
-	/* lookup the subprogram DIE in the CU */
-	retval = find_subprogram_by_pc(dwarf, cu_die, call->pc, &sp_die);
-	if (retval == -1) {
-		fprintf(stderr,
-			"Error: no subprogram entry found for the following call:\n");
-		fprintf(stderr, "[<%016lx>] %s+0x%x\n", call->pc,
-			call->symbol, call->offset);
-		abort();
-	}
-
-	printf("Subprogram\n");
-	print_die_info(dwarf, sp_die);
-
-	retval = dwarf_diename(sp_die, &name, NULL);
-	if (retval == DW_DLV_NO_ENTRY) {
-		fprintf(stderr,
-			"Error: expected subprogram DIE to have a name.\n");
-		print_die_info(dwarf, sp_die);
-		abort();
-	} else {
-		if (strcmp(name, call->symbol) != 0) {
-			fprintf(stderr,
-				"Error: wrong DIE found, expected \"%s\".\n",
-				call->symbol);
-			print_die_info(dwarf, sp_die);
-			abort();
-		}
-		dwarf_dealloc(dwarf, name, DW_DLA_STRING);
-	}
 
 	printf("Call frame information\n");
 	print_cfi(dwarf, call);
@@ -240,8 +240,6 @@ int print_call_info(Dwarf_Debug dwarf, const struct call_entry *call,
 			print_var_info(dwarf, child);
 		}
 	}
-
-	dwarf_dealloc(dwarf, sp_die, DW_DLA_DIE);
 	return 0;
 }
 
