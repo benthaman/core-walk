@@ -21,7 +21,8 @@
 struct call_entry {
 	unsigned long pc;
 	char *symbol;
-	int offset;
+	unsigned int offset;
+	unsigned int size;
 };
 
 int print_call_info(Dwarf_Debug dwarf, const struct call_entry *call,
@@ -32,11 +33,14 @@ void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld);
 void print_cfi(Dwarf_Debug dwarf, const struct call_entry *call);
 void print_regtable_entry(const char *regname, Dwarf_Regtable_Entry3 *entry);
 void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die);
+void print_line_info(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Die sp_die);
 
 int find_cu_by_pc(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 		  Dwarf_Signed ar_cnt, Dwarf_Addr pc, Dwarf_Die *result);
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die die, Dwarf_Addr pc,
 			  Dwarf_Die *result);
+int find_lineno_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc,
+		      char **file, unsigned int *line);
 
 
 void usage(FILE *stream, const char *progname)
@@ -63,6 +67,7 @@ int main(int argc, char *argv[])
 	Elf *elf;
 
 	Dwarf_Debug dwarf;
+	Dwarf_Half addr_size;
 	Dwarf_Arange *aranges;
 	Dwarf_Signed ar_cnt;
 
@@ -162,6 +167,8 @@ int main(int argc, char *argv[])
 		abort();
 	}
 
+	dwarf_get_address_size(dwarf, &addr_size, NULL);
+
 	/* todo: fallback to traversing all DIEs, especially if searching by
 	 * symbol instead of address */
 	retval = dwarf_get_aranges(dwarf, &aranges, &ar_cnt, NULL);
@@ -177,6 +184,7 @@ int main(int argc, char *argv[])
 		Dwarf_Die cu_die, sp_die;
 		Dwarf_Unsigned lang;
 		char *name;
+		unsigned int line;
 
 		retval = find_cu_by_pc(dwarf, aranges, ar_cnt, call->pc,
 				       &cu_die);
@@ -186,6 +194,35 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "[<%016lx>] %s\n", call->pc, call->symbol);
 			abort();
 		}
+
+		retval = find_lineno_by_pc(dwarf, cu_die, call->pc, &name,
+					   &line);
+		if (retval == -1) {
+			fprintf(stderr,
+				"Error: expected CU DIE to have line number information.\n");
+			print_die_info(dwarf, cu_die);
+			abort();
+		} else if (retval == -2) {
+			fprintf(stderr,
+				"Error: line number information not found for the following call:\n");
+			fprintf(stderr, "[<%016lx>] %s\n", call->pc,
+				call->symbol);
+			print_die_info(dwarf, cu_die);
+			if (find_subprogram_by_pc(dwarf, cu_die, call->pc,
+						  &sp_die) == 0) {
+				print_die_info(dwarf, sp_die);
+			} else {
+				fprintf(stderr,
+					"Info: no subprogram entry found for the previous call.\n");
+				sp_die = NULL;
+			}
+			print_line_info(dwarf, cu_die, sp_die);
+			abort();
+		}
+		printf("[<%0*lx>] %s+%#x/%#x (%s:%u)\n", 2 * (int) addr_size,
+		       call->pc, call->symbol, call->offset, call->size,
+		       name, line);
+		dwarf_dealloc(dwarf, name, DW_DLA_STRING);
 
 		if (verbose) {
 			printf("Compilation Unit\n");
@@ -213,12 +250,14 @@ int main(int argc, char *argv[])
 			abort();
 		}
 
-		dwarf_dealloc(dwarf, cu_die, DW_DLA_DIE);
-
 		if (verbose) {
 			printf("Subprogram\n");
 			print_die_info(dwarf, sp_die);
+
+			printf("Line numbers\n");
+			print_line_info(dwarf, cu_die, sp_die);
 		}
+		dwarf_dealloc(dwarf, cu_die, DW_DLA_DIE);
 
 		retval = dwarf_diename(sp_die, &name, NULL);
 		if (retval == DW_DLV_NO_ENTRY) {
@@ -272,6 +311,75 @@ int find_cu_by_pc(Dwarf_Debug dwarf, Dwarf_Arange *aranges,
 
 	dwarf_get_cu_die_offset(cu_arange, &cu_doff, NULL);
 	dwarf_offdie(dwarf, cu_doff, result, NULL);
+	return 0;
+}
+
+
+/* file must be free'ed using dwarf_dealloc(dwarf, result, DW_DLA_STRING) */
+int find_lineno_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc,
+		      char **file, unsigned int *line)
+{
+	Dwarf_Line *lines;
+	Dwarf_Signed nlines;
+	int i;
+	Dwarf_Unsigned lineno;
+	Dwarf_Addr previous = -1; /* -1: "Dwarf_Addr_MAX" */
+	Dwarf_Attribute comp_dir_attr;
+	char *comp_dir;
+	size_t len;
+	int retval;
+
+	retval = dwarf_srclines(cu_die, &lines, &nlines, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		return -1;
+	}
+
+	for (i = 0; i < nlines; i++) {
+		Dwarf_Addr laddr;
+
+		dwarf_lineaddr(lines[i], &laddr, NULL);
+		if (laddr == pc) {
+			break;
+		} else if (previous < pc && pc < laddr) {
+			/* If a new lineaddr is beyond pc, use the last line.
+			 * This is what gdb does. */
+			if (i > 0) {
+				i--;
+				break;
+			} else {
+				i = nlines;
+				break;
+			}
+		}
+		previous = laddr;
+	}
+
+	if (i != nlines) {
+		dwarf_lineno(lines[i], &lineno, NULL);
+		*line = lineno;
+		dwarf_linesrc(lines[i], file, NULL);
+	}
+	dwarf_srclines_dealloc(dwarf, lines, nlines);
+	if (i == nlines) {
+		return -2;
+	}
+
+	/* Strip the compilation directory from the file name. */
+	retval = dwarf_attr(cu_die, DW_AT_comp_dir, &comp_dir_attr, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		fprintf(stderr,
+			"Warning: expected CU DIE to have a compilation directory attribute.\n");
+		return 0;
+	}
+	dwarf_formstring(comp_dir_attr, &comp_dir, NULL);
+	len = strlen(comp_dir);
+	if (strlen(*file) >= len && memcmp(comp_dir, *file, len) == 0) {
+		*file += len;
+		if (**file == '/') {
+			(*file)++;
+		}
+	}
+
 	return 0;
 }
 
@@ -985,6 +1093,7 @@ void print_var_info(Dwarf_Debug dwarf, Dwarf_Die var_die)
 }
 
 
+/* result must be free'ed using dwarf_dealloc(dwarf, result, DW_DLA_DIE) */
 int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc,
 			  Dwarf_Die *result)
 {
@@ -1029,4 +1138,65 @@ int find_subprogram_by_pc(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Addr pc,
 	}
 
 	return -1;
+}
+
+
+void print_line_info(Dwarf_Debug dwarf, Dwarf_Die cu_die, Dwarf_Die sp_die)
+{
+	Dwarf_Line *lines;
+	Dwarf_Signed lines_nb;
+	char **names;
+	Dwarf_Signed names_nb;
+	Dwarf_Addr low_pc, high_pc;
+	int i;
+	int retval;
+
+	retval = dwarf_srclines(cu_die, &lines, &lines_nb, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		fprintf(stderr,
+			"Error: expected CU DIE to have line number information.\n");
+		abort();
+	}
+
+	retval = dwarf_srcfiles(cu_die, &names, &names_nb, NULL);
+	if (retval == DW_DLV_NO_ENTRY) {
+		fprintf(stderr,
+			"Error: expected CU DIE to have source file information.\n");
+		abort();
+	}
+
+	if (sp_die) {
+		retval = dwarf_lowpc(sp_die, &low_pc, NULL);
+		if (retval == DW_DLV_NO_ENTRY) {
+			fprintf(stderr,
+				"Error: expected subprogram DIE to have DW_AT_low_pc.\n");
+			abort();
+		}
+		retval = dwarf_highpc(sp_die, &high_pc, NULL);
+		if (retval == DW_DLV_NO_ENTRY) {
+			fprintf(stderr,
+				"Error: expected subprogram DIE to have DW_AT_high_pc.\n");
+			abort();
+		}
+	} else {
+		low_pc = 0;
+		high_pc = 0xffffffffffffffff;
+	}
+
+	for (i = 0; i < lines_nb; i++) {
+		Dwarf_Addr laddr;
+
+		dwarf_lineaddr(lines[i], &laddr, NULL);
+		if (laddr >= low_pc && laddr <= high_pc) {
+			Dwarf_Unsigned lnum, fnum;
+
+			dwarf_lineno(lines[i], &lnum, NULL);
+			dwarf_line_srcfileno(lines[i], &fnum, NULL);
+
+			printf("%016" DW_PR_DUx " %s:%" DW_PR_DUu "\n", laddr,
+			       names[fnum - 1], lnum);
+		}
+	}
+
+	dwarf_srclines_dealloc(dwarf, lines, lines_nb);
 }
