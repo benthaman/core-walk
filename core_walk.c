@@ -219,9 +219,9 @@ int main(int argc, char *argv[])
 			print_line_info(dwarf, cu_die, sp_die);
 			abort();
 		}
-		printf("[<%0*lx>] %s+%#x/%#x (%s:%u)\n", 2 * (int) addr_size,
-		       call->pc, call->symbol, call->offset, call->size,
-		       name, line);
+		printf("[<%0*lx>] %s+0x%x/0x%x (%s:%u)\n",
+		       2 * (int) addr_size, call->pc, call->symbol,
+		       call->offset, call->size, name, line);
 		dwarf_dealloc(dwarf, name, DW_DLA_STRING);
 
 		if (verbose) {
@@ -560,17 +560,16 @@ const char *register_abbrev[] = {
 void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld)
 {
 	int i;
-	const char *indent;
+	unsigned int indent = 8;
 	Dwarf_Half addr_size;
 
 	dwarf_get_address_size(dwarf, &addr_size, NULL);
 
 	if (ld->ld_from_loclist) {
-		printf("        [0x%2$0*1$" DW_PR_DUx ", 0x%3$0*1$" DW_PR_DUx "[\n",
-		       2 * (int) addr_size, ld->ld_lopc, ld->ld_hipc);
-		indent = "            ";
-	} else {
-		indent = "        ";
+		printf("%2$*1$c[0x%4$0*3$" DW_PR_DUx ", 0x%5$0*3$" DW_PR_DUx "[\n",
+		       indent, ' ', 2 * (int) addr_size, ld->ld_lopc,
+		       ld->ld_hipc);
+		indent += 4;
 	}
 
 	for (i = 0; i < ld->ld_cents; i++) {
@@ -580,7 +579,7 @@ void print_locdesc(Dwarf_Debug dwarf, Dwarf_Locdesc *ld)
 		const char *op_name;
 
 		dwarf_get_OP_name(op, &op_name);
-		printf("%s%s", indent, op_name);
+		printf("%*c%s", indent, ' ', op_name);
 
 		if (op >= DW_OP_reg0 && op <= DW_OP_reg15) {
 			printf("() # %s", register_abbrev[op - DW_OP_reg0]);
